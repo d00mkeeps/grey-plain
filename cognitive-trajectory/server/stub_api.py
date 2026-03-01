@@ -108,12 +108,14 @@ def generate_brain_activations(text: str, dominant_network: str) -> dict:
     return activations
 
 
-def generate_layer_activations(n_tokens: int, dominant_network: str) -> list:
+def generate_layer_activations(n_tokens: int, dominant_network: str, running_stats: dict = None) -> tuple[list, dict]:
     """
     Generate per-token layer activations.
     Shape follows bell curve peaking at middle layers,
     with network-specific layer emphasis.
     """
+    if running_stats is None:
+        running_stats = {}
     rng = np.random.default_rng(n_tokens * 7)
     result = []
 
@@ -138,7 +140,7 @@ def generate_layer_activations(n_tokens: int, dominant_network: str) -> list:
 
         result.append(layers)
 
-    return result
+    return result, running_stats
 
 
 def tokenize_simple(text: str) -> list:
@@ -189,7 +191,7 @@ async def chat(request: ChatRequest):
     response_text = STUB_RESPONSES[stub_response_idx % len(STUB_RESPONSES)]
     stub_response_idx += 1
     tokens = tokenize_simple(response_text)
-    layer_activations = generate_layer_activations(len(tokens), dominant)
+    layer_activations, _ = generate_layer_activations(len(tokens), dominant)
 
     async def event_stream():
         # First event: brain activations (computed from human message)
@@ -238,14 +240,11 @@ async def replay(request: ReplayRequest):
         tokens   = tokenize_simple(text)
 
         if speaker == "human":
-            # Token-by-token brain activations
-            token_activations = [
-                generate_brain_activations(
-                    " ".join(tokens[:j+1]),   # progressive context
-                    dominant
-                )
-                for j in range(len(tokens))
-            ]
+            token_activations = []
+            for j in range(len(tokens)):
+                act = generate_brain_activations(" ".join(tokens[:j+1]), dominant)
+                token_activations.append(act)
+                print(f"Stub human token {j} '{tokens[j]}' -> {sum(1 for v in act.values() if v > 0.05)} regions active")
             enriched.append({
                 "index":   i,
                 "speaker": "human",
@@ -259,7 +258,7 @@ async def replay(request: ReplayRequest):
                 "llm": None,
             })
         else:
-            layer_acts = generate_layer_activations(len(tokens), dominant)
+            layer_acts, _ = generate_layer_activations(len(tokens), dominant)
             enriched.append({
                 "index":   i,
                 "speaker": "llm",

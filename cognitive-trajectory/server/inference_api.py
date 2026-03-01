@@ -152,44 +152,70 @@ class InferenceModel:
             add_generation_prompt=True,
         )
 
-    def _hidden_states_to_layer_norms(self, hidden_states) -> list:
+    def _hidden_states_to_layer_norms(self, hidden_states, running_stats=None) -> tuple[list, dict]:
         """
         Convert raw hidden states to normalised per-layer activation scalars.
 
         hidden_states: tuple of (n_layers+1) tensors, each (1, n_tokens, hidden_dim)
-        Returns: list of float, length NUM_LAYERS, values in [0, 1]
+        running_stats: {layer_idx: {'mean': float, 'm2': float, 'n': int}}
+        Returns: (layer_activations, updated_running_stats)
         """
         import torch
         import numpy as np
 
+        if running_stats is None:
+            running_stats = {}
+
+        is_first_token = (len(running_stats) == 0)
+
         # Skip embedding layer (index 0), take transformer layers 1..32
         norms = []
-        for layer_hs in hidden_states[1:]:
+        for i, layer_hs in enumerate(hidden_states[1:]):
             # Take last token position, compute L2 norm across hidden dim
             norm = torch.norm(layer_hs[0, -1, :].float()).item()
             norms.append(norm)
 
-        # Normalise to [0, 1]
+            if i not in running_stats:
+                running_stats[i] = {'mean': 0.0, 'm2': 0.0, 'n': 0}
+            
+            stats = running_stats[i]
+            stats['n'] += 1
+            delta = norm - stats['mean']
+            stats['mean'] += delta / stats['n']
+            delta2 = norm - stats['mean']
+            stats['m2'] += delta * delta2
+
         norms = np.array(norms)
-        if norms.max() > norms.min():
-            norms = (norms - norms.min()) / (norms.max() - norms.min())
+        
+        if is_first_token:
+            if norms.max() > norms.min():
+                norms = (norms - norms.min()) / (norms.max() - norms.min())
+            else:
+                norms = np.ones_like(norms) * 0.5
         else:
-            norms = np.ones_like(norms) * 0.5
+            z_scores = []
+            for i, norm in enumerate(norms):
+                stats = running_stats[i]
+                std = np.sqrt(stats['m2'] / stats['n']) if stats['n'] > 1 else 1e-8
+                std = max(std, 1e-8)
+                z = (norm - stats['mean']) / std
+                z_scores.append(z)
+            z_scores = np.array(z_scores)
+            norms = np.clip(z_scores / 2.0, 0, 1)
 
-        return [round(float(v), 4) for v in norms]
+        return [round(float(v), 4) for v in norms], running_stats
 
-    def _hidden_state_to_brain_activations(self, hidden_state) -> dict:
+    def _hidden_state_to_brain_activations(self, hidden_state, running_stats: dict = None) -> tuple[dict, dict]:
         """
         Map a single hidden state vector (position -1, all layers stacked)
         to predicted activation per Destrieux region.
-
-        hidden_state: tensor (1, n_tokens, hidden_dim) from last transformer layer
-                      — we use the full stack via the stored PCA.
-
-        Actually we need the full (n_layers, hidden_dim) representation.
-        This is called with the stacked last-token hidden states.
+        
+        Returns: (activations_dict, updated_running_stats)
         """
         import numpy as np
+        
+        if running_stats is None:
+            running_stats = {}
 
         # hidden_state shape: (n_layers, hidden_dim) — last token, all layers
         hs_flat = hidden_state.reshape(1, -1).astype(np.float32)  # (1, n_layers*hidden_dim)
@@ -202,22 +228,42 @@ class InferenceModel:
         # Apply regression weights: (n_regions, 200) @ (200, 1)
         predictions = (self.weights @ hs_scaled.T).flatten()  # (n_regions,)
 
-        # Predictions are roughly BOLD z-scores (e.g., -0.3 to 0.3).
-        # We want to highlight only the most active regions relative to the rest of the brain.
-        # So we z-score the predictions themselves, and scale such that average=0,
-        # +2 std = 1.0 (clipping to [0, 1]). This creates a sparse, contrasty visual.
-        p_mean = predictions.mean()
-        p_std = predictions.std() + 1e-8
-        predictions = (predictions - p_mean) / p_std
-        
-        predictions = np.clip(predictions / 2.0, 0, 1)
+        is_first_token = len(running_stats) == 0
+        if is_first_token:
+            for i, p in enumerate(predictions):
+                running_stats[i] = {'n': 1, 'mean': p, 'm2': 0.0}
+        else:
+            for i, p in enumerate(predictions):
+                st = running_stats[i]
+                st['n'] += 1
+                delta = p - st['mean']
+                st['mean'] += delta / st['n']
+                delta2 = p - st['mean']
+                st['m2'] += delta * delta2
+
+        if is_first_token:
+            p_mean = predictions.mean()
+            p_std = predictions.std() + 1e-8
+            z_scores = (predictions - p_mean) / p_std
+            norms = np.clip(z_scores / 2.0, 0, 1)
+        else:
+            z_scores = []
+            for i, p in enumerate(predictions):
+                stats = running_stats[i]
+                std = np.sqrt(stats['m2'] / stats['n']) if stats['n'] > 1 else 1e-8
+                std = max(std, 1e-8)
+                z = (p - stats['mean']) / std
+                z_scores.append(z)
+            z_scores = np.array(z_scores)
+            norms = np.clip(z_scores / 2.0, 0, 1)
 
         activations = {
             name: round(float(val), 4)
-            for name, val in zip(self.region_names, predictions)
-            if float(val) > 0.05
+            for name, val in zip(self.region_names, norms)
         }
-        return activations
+        active_count = sum(1 for v in activations.values() if v > 0.05)
+        print(f"Computed activations for {len(activations)} regions, {active_count} active >0.05")
+        return activations, running_stats
 
     def _detect_dominant_network_from_activations(self, activations: dict) -> str:
         """
@@ -300,6 +346,8 @@ class InferenceModel:
             generated_ids  = inputs["input_ids"].clone()
             generated_text = ""
             max_new_tokens = 1024
+            
+            running_stats = {}
 
             for _ in range(max_new_tokens):
                 with torch.no_grad():
@@ -320,8 +368,8 @@ class InferenceModel:
                     break
 
                 # Layer activations for this token
-                layer_norms = self._hidden_states_to_layer_norms(
-                    token_outputs.hidden_states
+                layer_norms, running_stats = self._hidden_states_to_layer_norms(
+                    token_outputs.hidden_states, running_stats
                 )
 
                 generated_ids   = torch.cat([generated_ids, next_token_id.unsqueeze(0)], dim=1)
@@ -371,6 +419,7 @@ class InferenceModel:
                 tokens = re.findall(r"\w+|[^\w\s]", text)
 
                 token_activations = []
+                running_stats = {}
                 for j in range(len(tokens)):
                     # Progressive context: tokens up to position j
                     partial_text = " ".join(tokens[:j + 1])
@@ -392,9 +441,9 @@ class InferenceModel:
                         outputs = self.model(**inputs, output_hidden_states=True)
 
                     hs = self._get_all_hidden_states_last_token(outputs.hidden_states)
-                    token_activations.append(
-                        self._hidden_state_to_brain_activations(hs)
-                    )
+                    act, running_stats = self._hidden_state_to_brain_activations(hs, running_stats)
+                    token_activations.append(act)
+                    print(f"Token {j} '{tokens[j]}' -> {sum(1 for v in act.values() if v > 0.05)} active regions")
 
                 final_activations = token_activations[-1] if token_activations else {}
                 dominant = self._detect_dominant_network_from_activations(final_activations)
@@ -419,6 +468,7 @@ class InferenceModel:
                 import re
                 tokens = re.findall(r"\w+|[^\w\s]", text)
                 layer_activations_list = []
+                running_stats = {}
 
                 for j, token in enumerate(tokens):
                     partial_text = " ".join(tokens[:j + 1])
@@ -437,9 +487,8 @@ class InferenceModel:
                     with torch.no_grad():
                         outputs = self.model(**inputs, output_hidden_states=True)
 
-                    layer_activations_list.append(
-                        self._hidden_states_to_layer_norms(outputs.hidden_states)
-                    )
+                    layer_norms, running_stats = self._hidden_states_to_layer_norms(outputs.hidden_states, running_stats)
+                    layer_activations_list.append(layer_norms)
 
                 # Dominant network from layer weights
                 dominant = LAYER_NETWORK[layer_activations_list[-1].index(
