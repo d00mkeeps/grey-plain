@@ -44,3 +44,5 @@ ehthumbs.db
 Thumbs.db
 node_modules/
 cognitive-trajectory/dist/
+cognitive-trajectory/public/model/pca.pkl
+*.pkl

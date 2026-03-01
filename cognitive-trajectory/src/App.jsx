@@ -1,74 +1,99 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import Workspace3D          from './components/Workspace3D'
-import ConversationTimeline from './components/ConversationTimeline'
-import conversation         from './data/mockConversation.json'
-import { NETWORKS }         from './constants/networks'
+import Workspace3D from './components/Workspace3D'
+import RightPanel  from './components/RightPanel'
+import mockData    from './data/mockConversation.json'
+import { NETWORKS } from './constants/networks'
 
-const TURN_DURATION_MS  = 2800   // time per turn when playing
-const TOKEN_INTERVAL_MS = 180    // time per token when playing
+const TURN_DURATION_MS  = 2800
+const TOKEN_INTERVAL_MS = 180
 
 export default function App() {
-  const [turnIndex,  setTurnIndex]  = useState(0)
-  const [tokenIndex, setTokenIndex] = useState(0)
-  const [isPlaying,  setIsPlaying]  = useState(false)
-  const [resetCam,   setResetCam]   = useState(0)
+  // ── Playback mode state ────────────────────────────────────────────────────
+  const [playbackConversation, setPlaybackConversation] = useState(mockData)
+  const [turnIndex,   setTurnIndex]   = useState(0)
+  const [tokenIndex,  setTokenIndex]  = useState(0)
+  const [isPlaying,   setIsPlaying]   = useState(false)
+  const [resetCam,    setResetCam]    = useState(0)
+
+  // ── Chat mode state ────────────────────────────────────────────────────────
+  const [liveTurn, setLiveTurn] = useState(null)
+
+  const [activeTab, setActiveTab] = useState('chat')
+
+  // ── Which turn feeds Workspace3D ───────────────────────────────────────────
+  // liveTurn takes priority when it exists (chat mode active)
+  // falls back to playback turn
+  const playbackTurn  = playbackConversation[turnIndex]
+  const currentTurn   = activeTab === 'chat' ? (liveTurn ?? playbackTurn) : playbackTurn
+
+  const displayTokenIndex = (activeTab === 'chat' && liveTurn)
+    ? (liveTurn.speaker === 'llm' 
+        ? Math.max(0, (liveTurn.llm?.tokens?.length || 1) - 1) 
+        : Math.max(0, (liveTurn.human?.tokens?.length || 1) - 1))
+    : tokenIndex
 
   const playTimerRef  = useRef(null)
   const tokenTimerRef = useRef(null)
 
-  const currentTurn = conversation[turnIndex]
-  const tokens      = currentTurn?.llm?.tokens ?? []
-
-  // ── Token animation within a turn ─────────────────────────────────────────
   const startTokenAnimation = useCallback((turn) => {
     clearInterval(tokenTimerRef.current)
     setTokenIndex(0)
-    
-    const tokenList = turn?.speaker === 'human' ? turn?.human?.tokens : turn?.llm?.tokens
+    const tokenList = turn?.speaker === 'human'
+      ? turn?.human?.tokens
+      : turn?.llm?.tokens
     const maxTokens = tokenList?.length ?? 1
-    
     let t = 0
     tokenTimerRef.current = setInterval(() => {
       t++
-      if (t >= maxTokens) {
-        clearInterval(tokenTimerRef.current)
-      } else {
-        setTokenIndex(t)
-      }
+      if (t >= maxTokens) clearInterval(tokenTimerRef.current)
+      else setTokenIndex(t)
     }, TOKEN_INTERVAL_MS)
   }, [])
 
-  // ── Playback ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isPlaying) {
       clearTimeout(playTimerRef.current)
       clearInterval(tokenTimerRef.current)
       return
     }
-
-    if (currentTurn) startTokenAnimation(currentTurn)
+    if (playbackTurn) startTokenAnimation(playbackTurn)
+    
+    // Calculate enough time for all tokens to animate (plus a small pause)
+    const tokenList = playbackTurn?.speaker === 'human'
+      ? playbackTurn?.human?.tokens
+      : playbackTurn?.llm?.tokens
+    const maxTokens = tokenList?.length ?? 1
+    const dynamicDuration = Math.max(TURN_DURATION_MS, (maxTokens * TOKEN_INTERVAL_MS) + 400)
 
     playTimerRef.current = setTimeout(() => {
       setTurnIndex(prev => {
         const next = prev + 1
-        if (next >= conversation.length) {
+        if (next >= playbackConversation.length) {
           setIsPlaying(false)
           return prev
         }
         return next
       })
-    }, TURN_DURATION_MS)
-
-    return () => {
-      clearTimeout(playTimerRef.current)
-    }
-  }, [isPlaying, turnIndex])
+    }, dynamicDuration)
+    return () => clearTimeout(playTimerRef.current)
+  }, [isPlaying, turnIndex, playbackConversation])
 
   const handleSelectTurn = (i) => {
     setTurnIndex(i)
     setTokenIndex(0)
     clearTimeout(playTimerRef.current)
     clearInterval(tokenTimerRef.current)
+    setLiveTurn(null)   // clear live turn when scrubbing playback
+  }
+
+  const handleReplayReady = (enrichedConversation) => {
+    // Load replay data, switch to playback tab, reset to start
+    setPlaybackConversation(enrichedConversation)
+    setTurnIndex(0)
+    setTokenIndex(0)
+    setLiveTurn(null)
+    setIsPlaying(false)
+    setActiveTab('playback')
   }
 
   return (
@@ -86,39 +111,33 @@ export default function App() {
 
       {/* Header */}
       <div style={{
-        gridColumn:  '1 / -1',
-        position:    'relative',
-        display:     'flex',
-        alignItems:  'center',
-        padding:     '0 24px',
+        gridColumn:   '1 / -1',
+        position:     'relative',
+        display:      'flex',
+        alignItems:   'center',
+        padding:      '0 24px',
         borderBottom: '1px solid #0e1a2a',
         gap:          16,
       }}>
         <span style={{ fontSize: 13, letterSpacing: 2, color: '#3a6a9a' }}>
           COGNITIVE TRAJECTORY VISUALISER
         </span>
-        <span style={{ fontSize: 11, color: '#1a3a5a' }}>
-          · mock data · phase 3
-        </span>
+
         <div style={{ flex: 1 }} />
-        
-        {/* Reset Camera Button - Centered */}
-        <div style={{
-          position: 'absolute',
-          left: '50%',
-          transform: 'translateX(-50%)'
-        }}>
-          <button 
+
+        {/* Reset camera */}
+        <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)' }}>
+          <button
             onClick={() => setResetCam(c => c + 1)}
             style={{
-              background: '#1a2a3a',
-              border:     '1px solid #2a4a6a',
+              background:   '#1a2a3a',
+              border:       '1px solid #2a4a6a',
               borderRadius: 4,
-              color:      '#7ac0f0',
-              padding:    '4px 14px',
-              cursor:     'pointer',
-              fontSize:   11,
-              letterSpacing: 1
+              color:        '#7ac0f0',
+              padding:      '4px 14px',
+              cursor:       'pointer',
+              fontSize:     11,
+              letterSpacing: 1,
             }}>
             RESET CAMERA
           </button>
@@ -137,28 +156,30 @@ export default function App() {
         </div>
       </div>
 
-      {/* Unified 3D Workspace */}
+      {/* 3D workspace */}
       <div style={{ position: 'relative', background: '#08090f', overflow: 'hidden' }}>
         <Workspace3D
           currentTurn={currentTurn}
-          tokenIndex={tokenIndex}
+          tokenIndex={displayTokenIndex}
           onResetCamera={resetCam}
         />
       </div>
 
-      {/* Timeline */}
-      <div style={{ borderLeft: '1px solid #0e1a2a', overflow: 'hidden' }}>
-        <ConversationTimeline
-          conversation={conversation}
-          currentIndex={turnIndex}
-          currentTokenIndex={tokenIndex}
-          isPlaying={isPlaying}
-          onSelectTurn={handleSelectTurn}
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
-          onScrubToken={setTokenIndex}
-        />
-      </div>
+      {/* Right panel with tabs */}
+      <RightPanel
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        conversation={playbackConversation}
+        currentIndex={turnIndex}
+        currentTokenIndex={tokenIndex}
+        isPlaying={isPlaying}
+        onSelectTurn={handleSelectTurn}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onScrubToken={setTokenIndex}
+        onLiveTurn={setLiveTurn}
+        onReplayReady={handleReplayReady}
+      />
     </div>
   )
 }

@@ -1,0 +1,302 @@
+{
+  "G_and_S_frontomargin": {
+    "r2_test": -0.1888793706893921,
+    "alpha": 1000.0
+  },
+  "G_and_S_occipital_inf": {
+    "r2_test": -0.09940207004547119,
+    "alpha": 1000.0
+  },
+  "G_and_S_paracentral": {
+    "r2_test": -0.08924269676208496,
+    "alpha": 1000.0
+  },
+  "G_and_S_subcentral": {
+    "r2_test": -0.014600515365600586,
+    "alpha": 1000.0
+  },
+  "G_and_S_transv_frontopol": {
+    "r2_test": -0.1773214340209961,
+    "alpha": 1000.0
+  },
+  "G_and_S_cingul-Ant": {
+    "r2_test": -0.13742804527282715,
+    "alpha": 1000.0
+  },
+  "G_and_S_cingul-Mid-Ant": {
+    "r2_test": -0.026810288429260254,
+    "alpha": 1000.0
+  },
+  "G_and_S_cingul-Mid-Post": {
+    "r2_test": -0.012084722518920898,
+    "alpha": 1000.0
+  },
+  "G_cingul-Post-dorsal": {
+    "r2_test": -0.07780230045318604,
+    "alpha": 1000.0
+  },
+  "G_cingul-Post-ventral": {
+    "r2_test": -0.12607133388519287,
+    "alpha": 1000.0
+  },
+  "G_cuneus": {
+    "r2_test": -0.05815625190734863,
+    "alpha": 1000.0
+  },
+  "G_front_inf-Opercular": {
+    "r2_test": -0.022273778915405273,
+    "alpha": 1000.0
+  },
+  "G_front_inf-Orbital": {
+    "r2_test": -0.013592004776000977,
+    "alpha": 1000.0
+  },
+  "G_front_inf-Triangul": {
+    "r2_test": -0.015240669250488281,
+    "alpha": 1000.0
+  },
+  "G_front_middle": {
+    "r2_test": -0.01476752758026123,
+    "alpha": 1000.0
+  },
+  "G_front_sup": {
+    "r2_test": -0.010179758071899414,
+    "alpha": 1000.0
+  },
+  "G_Ins_lg_and_S_cent_ins": {
+    "r2_test": -0.09777867794036865,
+    "alpha": 1000.0
+  },
+  "G_insular_short": {
+    "r2_test": -0.029780149459838867,
+    "alpha": 1000.0
+  },
+  "G_occipital_middle": {
+    "r2_test": -0.023879528045654297,
+    "alpha": 1000.0
+  },
+  "G_occipital_sup": {
+    "r2_test": -0.02956855297088623,
+    "alpha": 1000.0
+  },
+  "G_oc-temp_lat-fusifor": {
+    "r2_test": -0.08775997161865234,
+    "alpha": 1000.0
+  },
+  "G_oc-temp_med-Lingual": {
+    "r2_test": -0.125726580619812,
+    "alpha": 1000.0
+  },
+  "G_oc-temp_med-Parahip": {
+    "r2_test": -0.08385694026947021,
+    "alpha": 1000.0
+  },
+  "G_orbital": {
+    "r2_test": -0.06035745143890381,
+    "alpha": 1000.0
+  },
+  "G_pariet_inf-Angular": {
+    "r2_test": -0.020804286003112793,
+    "alpha": 1000.0
+  },
+  "G_pariet_inf-Supramar": {
+    "r2_test": -0.013014435768127441,
+    "alpha": 1000.0
+  },
+  "G_parietal_sup": {
+    "r2_test": 0.01409924030303955,
+    "alpha": 1000.0
+  },
+  "G_postcentral": {
+    "r2_test": -0.08453822135925293,
+    "alpha": 1000.0
+  },
+  "G_precentral": {
+    "r2_test": -0.026338696479797363,
+    "alpha": 1000.0
+  },
+  "G_precuneus": {
+    "r2_test": -0.0278470516204834,
+    "alpha": 1000.0
+  },
+  "G_rectus": {
+    "r2_test": -0.09258890151977539,
+    "alpha": 1000.0
+  },
+  "G_subcallosal": {
+    "r2_test": -0.15788209438323975,
+    "alpha": 1000.0
+  },
+  "G_temp_sup-G_T_transv": {
+    "r2_test": -0.0635066032409668,
+    "alpha": 1000.0
+  },
+  "G_temp_sup-Lateral": {
+    "r2_test": -0.05759406089782715,
+    "alpha": 1000.0
+  },
+  "G_temp_sup-Plan_polar": {
+    "r2_test": -0.019826531410217285,
+    "alpha": 1000.0
+  },
+  "G_temp_sup-Plan_tempo": {
+    "r2_test": -0.08424091339111328,
+    "alpha": 1000.0
+  },
+  "G_temporal_inf": {
+    "r2_test": -0.04081320762634277,
+    "alpha": 1000.0
+  },
+  "G_temporal_middle": {
+    "r2_test": -0.04346752166748047,
+    "alpha": 1000.0
+  },
+  "Lat_Fis-ant-Horizont": {
+    "r2_test": -0.0676501989364624,
+    "alpha": 1000.0
+  },
+  "Lat_Fis-ant-Vertical": {
+    "r2_test": -0.030547618865966797,
+    "alpha": 1000.0
+  },
+  "Lat_Fis-post": {
+    "r2_test": -0.04005289077758789,
+    "alpha": 1000.0
+  },
+  "Medial_wall": {
+    "r2_test": -0.1324753761291504,
+    "alpha": 1000.0
+  },
+  "Pole_occipital": {
+    "r2_test": 0.005032598972320557,
+    "alpha": 1000.0
+  },
+  "Pole_temporal": {
+    "r2_test": -0.033545613288879395,
+    "alpha": 1000.0
+  },
+  "S_calcarine": {
+    "r2_test": -0.09919369220733643,
+    "alpha": 1000.0
+  },
+  "S_central": {
+    "r2_test": -0.02286350727081299,
+    "alpha": 1000.0
+  },
+  "S_cingul-Marginalis": {
+    "r2_test": -0.03699135780334473,
+    "alpha": 1000.0
+  },
+  "S_circular_insula_ant": {
+    "r2_test": -0.046259403228759766,
+    "alpha": 1000.0
+  },
+  "S_circular_insula_inf": {
+    "r2_test": -0.1310725212097168,
+    "alpha": 1000.0
+  },
+  "S_circular_insula_sup": {
+    "r2_test": -0.02232527732849121,
+    "alpha": 1000.0
+  },
+  "S_collat_transv_ant": {
+    "r2_test": -0.010511159896850586,
+    "alpha": 1000.0
+  },
+  "S_collat_transv_post": {
+    "r2_test": -0.051308274269104004,
+    "alpha": 1000.0
+  },
+  "S_front_inf": {
+    "r2_test": -0.018111467361450195,
+    "alpha": 1000.0
+  },
+  "S_front_middle": {
+    "r2_test": -0.1352529525756836,
+    "alpha": 1000.0
+  },
+  "S_front_sup": {
+    "r2_test": -0.017325639724731445,
+    "alpha": 1000.0
+  },
+  "S_interm_prim-Jensen": {
+    "r2_test": -0.05055117607116699,
+    "alpha": 1000.0
+  },
+  "S_intrapariet_and_P_trans": {
+    "r2_test": -0.029236316680908203,
+    "alpha": 1000.0
+  },
+  "S_oc_middle_and_Lunatus": {
+    "r2_test": -0.11856949329376221,
+    "alpha": 1000.0
+  },
+  "S_oc_sup_and_transversal": {
+    "r2_test": -0.05090737342834473,
+    "alpha": 1000.0
+  },
+  "S_occipital_ant": {
+    "r2_test": -0.1025702953338623,
+    "alpha": 1000.0
+  },
+  "S_oc-temp_lat": {
+    "r2_test": -0.1016232967376709,
+    "alpha": 1000.0
+  },
+  "S_oc-temp_med_and_Lingual": {
+    "r2_test": -0.06000328063964844,
+    "alpha": 1000.0
+  },
+  "S_orbital_lateral": {
+    "r2_test": -0.033656954765319824,
+    "alpha": 1000.0
+  },
+  "S_orbital_med-olfact": {
+    "r2_test": -0.22345054149627686,
+    "alpha": 1000.0
+  },
+  "S_orbital-H_Shaped": {
+    "r2_test": -0.09755027294158936,
+    "alpha": 1000.0
+  },
+  "S_parieto_occipital": {
+    "r2_test": -0.07595956325531006,
+    "alpha": 1000.0
+  },
+  "S_pericallosal": {
+    "r2_test": -0.09649896621704102,
+    "alpha": 1000.0
+  },
+  "S_postcentral": {
+    "r2_test": -0.012832045555114746,
+    "alpha": 1000.0
+  },
+  "S_precentral-inf-part": {
+    "r2_test": -0.017058134078979492,
+    "alpha": 1000.0
+  },
+  "S_precentral-sup-part": {
+    "r2_test": -0.016100406646728516,
+    "alpha": 1000.0
+  },
+  "S_suborbital": {
+    "r2_test": -0.044025301933288574,
+    "alpha": 1000.0
+  },
+  "S_subparietal": {
+    "r2_test": -0.09320664405822754,
+    "alpha": 1000.0
+  },
+  "S_temporal_inf": {
+    "r2_test": -0.06983935832977295,
+    "alpha": 1000.0
+  },
+  "S_temporal_sup": {
+    "r2_test": -0.1414581537246704,
+    "alpha": 1000.0
+  },
+  "S_temporal_transverse": {
+    "r2_test": -0.06713473796844482,
+    "alpha": 1000.0
+  }
+}

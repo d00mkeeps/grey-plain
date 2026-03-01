@@ -13,7 +13,6 @@ export default function ConversationTimeline({
   const listRef = useRef(null)
 
   useEffect(() => {
-    // Scroll active turn into view
     const el = listRef.current?.querySelector(`[data-index="${currentIndex}"]`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }, [currentIndex])

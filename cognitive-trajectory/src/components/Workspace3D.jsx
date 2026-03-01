@@ -260,7 +260,10 @@ export default function Workspace3D({ currentTurn, tokenIndex, onResetCamera }) 
     // Brain vertex colours — partial region fill
     if (brainMesh && vertexRegions && regionMap && renderer) {
       const colorAttr        = brainMesh.geometry.attributes.color
-      const activationByName = humanData?.tokenActivations?.[tokenIndex] || {}
+      let activationByName = humanData?.tokenActivations?.[tokenIndex]
+      if (!activationByName || Object.keys(activationByName).length === 0) {
+        activationByName = humanData?.regionActivations || {}
+      }
       const sortedLists      = sceneRef.current.regionSortedLists
 
       console.log('Brain update token', tokenIndex, Object.keys(activationByName).length, 'regions')

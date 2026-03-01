@@ -12,21 +12,23 @@ export const NETWORKS = {
 
 export const REGION_NETWORK_MAP = {
   // Language
-  'G_temp_sup-Lateral':    'language',
+  'G_temporal_sup':        'language',
   'G_front_inf-Triangul':  'language',
   'G_pariet_inf-Angular':  'language',
   'S_temporal_sup':        'language',
+  'G_temp_sup-Lateral':    'language',
+  'Pole_temporal':         'language',
 
   // Default Mode
   'G_cingul-Post-dorsal':  'dmn',
   'G_precuneus':           'dmn',
   'G_front_sup':           'dmn',
-  'G_pariet_inf-Angular':  'dmn',
+  'G_cingul-Post-ventral': 'dmn',
 
   // Attention
   'G_front_middle':        'attention',
   'G_pariet_inf-Supramar': 'attention',
-  'G_front_sup':           'attention',
+  'G_and_S_cingul-Mid-Post':'attention',
 
   // Sensorimotor
   'G_precentral':          'motor',
@@ -37,4 +39,10 @@ export const REGION_NETWORK_MAP = {
   'G_occipital_sup':       'visual',
   'G_cuneus':              'visual',
   'G_oc-temp_lat-fusifor': 'visual',
+  'G_occipital_middle':    'visual',
+  'G_and_S_occipital_inf': 'visual',
+
+  // Limbic
+  'G_oc-temp_med-Parahip': 'limbic',
+  'G_and_S_cingul-Mid-Ant':'limbic',
 }
