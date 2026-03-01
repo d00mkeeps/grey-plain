@@ -46,3 +46,10 @@ node_modules/
 cognitive-trajectory/dist/
 cognitive-trajectory/public/model/pca.pkl
 *.pkl
+*.h5
+cognitive-trajectory/package-lock.json
+cognitive-trajectory/src/data/mockConversation.json
+cognitive-trajectory/public/brain.json
+cognitive-trajectory/public/regionMap.json
+node_modules/
+dist/
