@@ -193,8 +193,8 @@ export default function Workspace3D({
         vlist.sort((a, b) => {
           const da = (a.x - cx) ** 2 + (a.y - cy) ** 2 + (a.z - cz) ** 2;
           const db = (b.x - cx) ** 2 + (b.y - cy) ** 2 + (b.z - cz) ** 2;
-          // furthest centroid first (gyral crowns) so it's visible outside
-          return db - da; 
+          // Sort by distance from centroid (closest first) for center-out expansion
+          return da - db; 
         });
         regionSortedLists[k] = vlist.map((v) => v.i); // just keep index
       });
@@ -342,12 +342,6 @@ export default function Workspace3D({
     const renderer = rendererRef.current;
     const { scene, camera } = sceneRef.current;
 
-    // ── Diagnostic: confirm effect re-fires with changing tokenIndex ─────────
-    const _ta = humanData?.tokenActivations;
-    const _sampleVal = _ta?.[tokenIndex] ? Object.values(_ta[tokenIndex])[0] : null;
-    console.log(`[Effect] tokenIndex=${tokenIndex} speaker=${currentTurn?.speaker} sampleActivation=${_sampleVal?.toFixed(4) ?? 'n/a'}`);
-    // ─────────────────────────────────────────────────────────────────────────
-
     sceneRef.current.targetHumanColor = humanData
       ? new THREE.Color("#7ac0f0")
       : new THREE.Color("#3a5a7a");
@@ -394,56 +388,28 @@ export default function Workspace3D({
 
           activeCount++;
           const vlist = sortedLists[regionIdx];
-          // Paint ALL vertices in this region with brightness ∝ activation.
-          // Partial-fill was invisible because outermost vertices were always
-          // in the painted set (sorted furthest-first); inner changes were occluded.
-          // Full-region brightness makes the entire visible surface pulse per token.
-          const brightness = 0.15 + 0.85 * Math.min(1, Math.max(0, activation));
+          // Linear count from center outward. 
+          // Color is full network color with no modulation per user request.
+          const t     = Math.min(1, Math.max(0, activation));
+          const count = Math.max(1, Math.round(t * vlist.length));
           const netCol = networkColor(networkKey);
-          const r = netCol.r * brightness;
-          const g = netCol.g * brightness;
-          const b = netCol.b * brightness;
-          for (let j = 0; j < vlist.length; j++) {
-            colorAttr.setXYZ(vlist[j], r, g, b);
+          for (let j = 0; j < count; j++) {
+            colorAttr.setXYZ(vlist[j], netCol.r, netCol.g, netCol.b);
           }
         });
       }
 
-      //
-      // ━━━ PARTIAL ACTIVATION RAMP TEST ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      // Even/odd alternating regions as before, but brightness ramps
-      // 0 → 1 in +0.05 steps per token, resetting to 0 when it hits 1.
-      const isOdd = tokenIndex % 2 === 1;
-      const activationLevel = (tokenIndex % 21) * 0.05; // 0.00, 0.05, ..., 1.00
-
-      // Reset all to inactive first
-      for (let i = 0; i < vertexRegions.length; i++) {
-        colorAttr.setXYZ(i, INACTIVE_COLOR.r, INACTIVE_COLOR.g, INACTIVE_COLOR.b);
-      }
-
-      if (sortedLists) {
-        const regionKeys = Object.keys(sortedLists);
-        regionKeys.forEach((k, idx) => {
-          const shouldLight = isOdd ? (idx % 2 === 1) : (idx % 2 === 0);
-          if (!shouldLight) return;
-          const vlist = sortedLists[k];
-          const cols = [[1,0.2,0], [0,0.5,1], [0,1,0.3], [1,0.8,0], [0.8,0,1], [1,0,0.5]];
-          const [cr, cg, cb] = cols[idx % 6];
-          const r = cr * activationLevel;
-          const g = cg * activationLevel;
-          const b = cb * activationLevel;
-          for (let j = 0; j < vlist.length; j++) {
-            colorAttr.setXYZ(vlist[j], r, g, b);
-          }
-        });
-      }
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-      console.log(`[Brain] token=${tokenIndex} | activation=${activationLevel.toFixed(2)} | ${isOdd ? 'ODD' : 'EVEN'} regions`);
+      console.log(
+        `[Brain] token=${tokenIndex} | incoming=${totalIncoming}`,
+        `| low-activation=${skippedLowActivation}`,
+        `| no-network=${skippedNoNetwork}`,
+        `| no-regionKey=${skippedNoRegionKey}`,
+        `| PAINTED=${activeCount}`
+      );
 
       const debugEl = document.getElementById("debug-overlay");
       if (debugEl) {
-        debugEl.innerText = `Token: ${tokenIndex} | Activation: ${activationLevel.toFixed(2)} | ${isOdd ? 'ODD' : 'EVEN'} regions`;
+        debugEl.innerText = `Token: ${tokenIndex} | Painted: ${activeCount} / ${totalIncoming}`;
       }
 
       colorAttr.needsUpdate = true;
