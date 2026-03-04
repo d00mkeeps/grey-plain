@@ -12,6 +12,8 @@ Swaps:
 """
 
 import modal
+import os
+import json
 
 # ── Modal app definition ──────────────────────────────────────────────────────
 
@@ -103,7 +105,7 @@ class InferenceModel:
         print("Loading tokenizer...")
         self.tokenizer = AutoTokenizer.from_pretrained(
             MODEL_ID,
-            token=modal.Secret.from_name("huggingface"),
+            token=True,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -113,7 +115,7 @@ class InferenceModel:
             MODEL_ID,
             torch_dtype=torch.float16,
             device_map="auto",
-            token=modal.Secret.from_name("huggingface"),
+            token=True,
         )
         self.model.eval()
         print("Model loaded.")
@@ -325,7 +327,7 @@ class InferenceModel:
         hs_last_token = self._get_all_hidden_states_last_token(
             brain_outputs.hidden_states
         )
-        brain_activations = self._hidden_state_to_brain_activations(hs_last_token)
+        brain_activations, _ = self._hidden_state_to_brain_activations(hs_last_token)
         dominant_network  = self._detect_dominant_network_from_activations(brain_activations)
 
         # ── Generation with per-token hidden states ───────────────────────────
@@ -388,7 +390,15 @@ class InferenceModel:
                 "data": {"fullText": generated_text.strip()}
             }) + "\n"
 
-        return StreamingResponse(event_stream(), media_type="text/plain")
+        return StreamingResponse(
+            event_stream(), 
+            media_type="text/plain",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            }
+        )
 
     # ── /replay endpoint ───────────────────────────────────────────────────────
 
@@ -509,4 +519,13 @@ class InferenceModel:
 
                 context_messages.append({"role": "assistant", "content": text})
 
-        return {"conversation": enriched}
+        from fastapi import Response
+        return Response(
+            content=json.dumps({"conversation": enriched}),
+            media_type="application/json",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            }
+        )

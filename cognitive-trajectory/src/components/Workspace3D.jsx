@@ -142,76 +142,210 @@ export default function Workspace3D({
       fetch("/brain.json").then((r) => r.json()),
       fetch("/regionMap.json").then((r) => r.json()),
     ]).then(([brainData, regionMap]) => {
-      const { vertices, faces } = brainData;
-      const geometry = new THREE.BufferGeometry();
-      const positions = new Float32Array(vertices.length * 3);
-      const colors = new Float32Array(vertices.length * 3);
+      const { vertices } = brainData;
 
-      vertices.forEach((v, i) => {
-        positions[i * 3] = v.x;
-        positions[i * 3 + 1] = v.y;
-        positions[i * 3 + 2] = v.z;
-        INACTIVE_COLOR.toArray(colors, i * 3);
-      });
-
-      const indices = new Uint32Array(faces.flat());
-      geometry.setAttribute(
-        "position",
-        new THREE.BufferAttribute(positions, 3),
-      );
-      geometry.setAttribute(
-        "color", 
-        new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage)
-      );
-      geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-      geometry.computeVertexNormals();
-
-      const material = new THREE.MeshPhongMaterial({
-        vertexColors: true,
-        side: THREE.DoubleSide,
-        shininess: 30,
-      });
-
-      const mesh = new THREE.Mesh(geometry, material);
-      brainGroup.add(mesh);
-
-      // ─ Precompute per-region sorted vertex lists (centroid → outward) ─
-      // This lets us fill a fraction of each region proportional to activation.
-      const regionVerts = {}; // regionIdx → [{ vertexIndex, dist }]
-      vertices.forEach((v, i) => {
-        const k = v.region;
-        if (!regionVerts[k]) regionVerts[k] = [];
-        regionVerts[k].push({ i, x: v.x, y: v.y, z: v.z });
-      });
-      // Sort each region's vertices from centroid outward
-      const regionSortedLists = {};
-      Object.keys(regionVerts).forEach((k) => {
-        const vlist = regionVerts[k];
-        const cx = vlist.reduce((s, v) => s + v.x, 0) / vlist.length;
-        const cy = vlist.reduce((s, v) => s + v.y, 0) / vlist.length;
-        const cz = vlist.reduce((s, v) => s + v.z, 0) / vlist.length;
-        vlist.sort((a, b) => {
-          const da = (a.x - cx) ** 2 + (a.y - cy) ** 2 + (a.z - cz) ** 2;
-          const db = (b.x - cx) ** 2 + (b.y - cy) ** 2 + (b.z - cz) ** 2;
-          // Sort by distance from centroid (closest first) for center-out expansion
-          return da - db; 
-        });
-        regionSortedLists[k] = vlist.map((v) => v.i); // just keep index
-      });
-
-      // Build fast reverse-lookup: region name → regionMap key string
+      // ── Voxelization for MRI Raymarching ──────────────────────────────────
       const regionNameToKey = {};
       Object.keys(regionMap).forEach((k) => {
         const name = regionMap[k]?.name;
         if (name) regionNameToKey[name] = k;
       });
 
-      sceneRef.current.brainMesh = mesh;
-      sceneRef.current.vertexRegions = vertices.map((v) => v.region);
+      const regionVertsTemp = {};
+      vertices.forEach((v) => {
+        if (!regionVertsTemp[v.region]) regionVertsTemp[v.region] = [];
+        regionVertsTemp[v.region].push(v);
+      });
+      const regionCentroids = {};
+      Object.keys(regionVertsTemp).forEach((k) => {
+        const vlist = regionVertsTemp[k];
+        regionCentroids[k] = {
+          x: vlist.reduce((s, v) => s + v.x, 0) / vlist.length,
+          y: vlist.reduce((s, v) => s + v.y, 0) / vlist.length,
+          z: vlist.reduce((s, v) => s + v.z, 0) / vlist.length,
+        };
+      });
+
+      let minX = 999, maxX = -999, minY = 999, maxY = -999, minZ = 999, maxZ = -999;
+      vertices.forEach(v => {
+         minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x);
+         minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
+         minZ = Math.min(minZ, v.z); maxZ = Math.max(maxZ, v.z);
+      });
+      // Pad bounds
+      minX -= 5; maxX += 5; minY -= 5; maxY += 5; minZ -= 5; maxZ += 5;
+      const sizeX = maxX - minX;
+      const sizeY = maxY - minY;
+      const sizeZ = maxZ - minZ;
+      const maxDim = Math.max(sizeX, sizeY, sizeZ);
+      const SIZE = 128;
+      // Pre-allocate empty 3D Texture to ensure ShaderMaterial compiles successfully.
+      const initialVolData = new Uint8Array(SIZE * SIZE * SIZE * 4); // RGBA format
+      const volumeTex = new THREE.Data3DTexture(initialVolData, SIZE, SIZE, SIZE);
+      volumeTex.format = THREE.RGBAFormat;
+      volumeTex.type = THREE.UnsignedByteType;
+      volumeTex.minFilter = volumeTex.magFilter = THREE.NearestFilter;
+      volumeTex.unpackAlignment = 1;
+      volumeTex.needsUpdate = true;
+
+      // 1D palette texture for dynamic coloring per region (max 255 regions)
+      const paletteData = new Uint8Array(256 * 4); // RGBA
+      const paletteTex = new THREE.DataTexture(paletteData, 256, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+      paletteTex.minFilter = paletteTex.magFilter = THREE.NearestFilter;
+      paletteTex.unpackAlignment = 1;
+      paletteTex.needsUpdate = true;
+      sceneRef.current.paletteData = paletteData;
+      sceneRef.current.paletteTex  = paletteTex;
+
+      // Fetch the pre-computed anatomical atlas with procedural growth maps
+      fetch('/atlas_volume.bin?v=' + Date.now())
+        .then(res => res.arrayBuffer())
+        .then(buffer => {
+           const volData = new Uint8Array(buffer);
+           
+           // We exported a 4-channel array from python (RGBA)
+           // R = Region ID, G = Growth Rank (0..255)
+           volumeTex.image.data = volData;
+           volumeTex.needsUpdate = true;
+           
+           if (sceneRef.current.brainMat) {
+               sceneRef.current.brainMat.needsUpdate = true;
+           }
+           console.log(`[Raymarch] Loaded anatomical 128x128x128 binary atlas!`);
+        })
+        .catch(err => console.error("Failed to load atlas:", err));
+
+      // ─ Shader Material for Raymarching ─
+      const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+      
+      const vertexShader = `
+          out vec3 vOrigin;
+          out vec3 vDirection;
+          
+          void main() {
+            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+            vOrigin = vec3(inverse(modelMatrix) * vec4(cameraPosition, 1.0));
+            vDirection = position - vOrigin;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `;
+
+      const fragmentShader = `
+          precision highp float;
+          precision highp sampler3D;
+          uniform sampler3D map;       // RGBA 3D Atlas
+          uniform sampler2D palette;   // 1D Color/Activation lookup
+          in vec3 vOrigin;
+          in vec3 vDirection;
+          out vec4 color;
+          
+          vec2 hitBox( vec3 orig, vec3 dir ) {
+            // Box is in local standard unit space
+            vec3 box_min = vec3( -0.5 );
+            vec3 box_max = vec3( 0.5 );
+            vec3 inv_dir = 1.0 / dir;
+            vec3 tmin_tmp = ( box_min - orig ) * inv_dir;
+            vec3 tmax_tmp = ( box_max - orig ) * inv_dir;
+            vec3 tmin = min( tmin_tmp, tmax_tmp );
+            vec3 tmax = max( tmin_tmp, tmax_tmp );
+            float t0 = max( tmin.x, max( tmin.y, tmin.z ) );
+            float t1 = min( tmax.x, min( tmax.y, tmax.z ) );
+            return vec2( t0, t1 );
+          }
+          
+          void main(){
+            vec3 rayDir = normalize(vDirection);
+            vec2 bounds = hitBox(vOrigin, rayDir);
+            if (bounds.x > bounds.y) discard;
+            bounds.x = max(bounds.x, 0.0);
+            
+            vec3 p = vOrigin + bounds.x * rayDir;
+            vec3 inc = 1.0 / abs(rayDir);
+            float delta = min(inc.x, min(inc.y, inc.z)) / 128.0;
+            vec3 dirStep = rayDir * delta;
+            
+            vec4 result = vec4(0.0);
+            // March
+            for (int i = 0; i < 200; i++) {
+              p += dirStep;
+              // Map local P (-0.5 -> 0.5) to texture space (0.0 -> 1.0)
+              vec3 tpos = p + vec3(0.5);
+              
+              if (tpos.x < 0.0 || tpos.y < 0.0 || tpos.z < 0.0 || 
+                  tpos.x > 1.0 || tpos.y > 1.0 || tpos.z > 1.0) break;
+                  
+              vec4 voxel = texture(map, tpos);
+              // In UnsignedByteType data textures, the shader gets values from 0.0 to 1.0 automatically 
+              // UNLESS they are read raw. Since we packed 0-255 into uint8, WebGL gives us floats 0.0-1.0
+              // rId is voxel.r * 255.0 to get back the index. Using floor(val + 0.5) to fix float precision bugs.
+              float rId = floor(voxel.r * 255.0 + 0.5);      
+              // gRank must also remain 0.0 to 1.0 natively. We don't reconstruct an int for it.
+              float gRank = voxel.g;            
+              
+              if (rId > 0.0) {
+                 vec4 pColor = texture(palette, vec2((rId + 0.5)/256.0, 0.5));
+                 float activ = clamp(pColor.a, 0.0, 1.0);
+                 
+                 if (activ > 0.05 && activ >= gRank) {
+                    float leadEdge = 1.0 - smoothstep(max(0.0, activ - 0.2), activ, gRank);
+                    float finalActiv = activ * leadEdge;
+                    
+                    if (finalActiv > 0.01) {
+                        result.rgb += pColor.rgb * finalActiv * 0.16;
+                        result.a += finalActiv * 0.16;
+                    }
+                 }
+              }
+              if (result.a >= 1.0) {
+                 result.a = 1.0;
+                 break;
+              }
+            }
+            if (result.a == 0.0) discard;
+            color = result;
+          }
+        `; // End fragmentShader
+
+      const brainMat = new THREE.ShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.BackSide,
+        uniforms: {
+          map: { value: volumeTex },
+          palette: { value: paletteTex },
+        },
+        vertexShader: vertexShader,
+        fragmentShader: fragmentShader
+      });
+      
+      const brainMesh = new THREE.Mesh(boxGeo, brainMat);
+      // Scale to dimensions of voxel grid, position at center
+      brainMesh.scale.set(maxDim, maxDim, maxDim);
+      brainMesh.position.set(minX + maxDim/2, minY + maxDim/2, minZ + maxDim/2);
+      brainGroup.add(brainMesh);
+      sceneRef.current.brainMesh = brainMesh;
+      
+      console.log(`[Raymarch Debug] brainMesh positioned at: ${brainMesh.position.x.toFixed(1)}, ${brainMesh.position.y.toFixed(1)}, ${brainMesh.position.z.toFixed(1)} with scale: ${brainMesh.scale.x.toFixed(1)}`);
+
+      // ─ Detailed Outlines (Faint shell) ─
+      // Hologram wireframe of the outer boundaries
+      const meshGeo = new THREE.BufferGeometry();
+      const meshPos = new Float32Array(vertices.length * 3);
+      vertices.forEach((v, i) => {
+        meshPos[i * 3] = v.x; meshPos[i * 3 + 1] = v.y; meshPos[i * 3 + 2] = v.z;
+      });
+      meshGeo.setAttribute("position", new THREE.BufferAttribute(meshPos, 3));
+      meshGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(brainData.faces.flat()), 1));
+      const wireframeGeo = new THREE.WireframeGeometry(meshGeo);
+      const wireframe = new THREE.LineSegments(wireframeGeo, new THREE.LineBasicMaterial({
+        color: 0x3a5a7a, transparent: true, opacity: 0.04, depthWrite: false
+      }));
+      brainGroup.add(wireframe);
+
       sceneRef.current.regionMap = regionMap;
       sceneRef.current.regionNameToKey = regionNameToKey;
-      sceneRef.current.regionSortedLists = regionSortedLists;
-      console.log('[Brain] Loaded. Regions in map:', Object.keys(regionMap).length, '| Names indexed:', Object.keys(regionNameToKey).length);
+      console.log('[Brain] Loaded. Rayserizer done. Regions in map:', Object.keys(regionMap).length);
       setModelsLoaded(true);
     });
 
@@ -338,7 +472,7 @@ export default function Workspace3D({
 
   // ── Update activations per token ─────────────────────────────────────────────
   useEffect(() => {
-    const { brainMesh, vertexRegions, regionMap, llmLayers } = sceneRef.current;
+    const { llmLayers } = sceneRef.current;
     const renderer = rendererRef.current;
     const { scene, camera } = sceneRef.current;
 
@@ -349,70 +483,83 @@ export default function Workspace3D({
       ? new THREE.Color("#7ac0f0")
       : new THREE.Color("#3a5a7a");
 
-    // Brain vertex colours — partial region fill
-    if (brainMesh && vertexRegions && regionMap && renderer) {
-      const colorAttr       = brainMesh.geometry.attributes.color;
+    // Raymarching Palette Update
+    if (sceneRef.current.paletteData && sceneRef.current.paletteTex) {
+      const paletteData = sceneRef.current.paletteData;
+      const paletteTex  = sceneRef.current.paletteTex;
       const regionNameToKey = sceneRef.current.regionNameToKey || {};
-      const sortedLists     = sceneRef.current.regionSortedLists;
 
       let activationByName = null;
       if (humanData?.tokenActivations && humanData.tokenActivations.length > tokenIndex) {
         activationByName = humanData.tokenActivations[tokenIndex];
       }
-      // Fall back to regionActivations (live chat / end of token list)
       if (!activationByName || Object.keys(activationByName).length === 0) {
         activationByName = humanData?.regionActivations || {};
       }
 
       const totalIncoming = Object.keys(activationByName).length;
-      let skippedLowActivation = 0;
-      let skippedNoNetwork    = 0;
-      let skippedNoRegionKey  = 0;
-      let activeCount         = 0;
+      let activeCount     = 0;
 
-      // Reset all vertices to inactive
-      for (let i = 0; i < vertexRegions.length; i++) {
-        colorAttr.setXYZ(i, INACTIVE_COLOR.r, INACTIVE_COLOR.g, INACTIVE_COLOR.b);
-      }
+      // Force a new buffer allocation to prevent WebGL caching the same memory pointer
+      // and silently dropping hot-reloaded or rapid continuous updates.
+      const newData = new Uint8Array(256 * 4);
 
-      if (humanData && sortedLists) {
+      if (humanData) {
+        let maxAct = 0;
+        let activeRegionsCount = 0;
+        const sampleLogs = [];
+        let sampleCount = 0;
+        
         Object.entries(activationByName).forEach(([name, activation]) => {
-          if (activation <= 0.05) { skippedLowActivation++; return; }
-
-          const networkKey = REGION_NETWORK_MAP[name];
-          if (!networkKey) { skippedNoNetwork++; return; }
-
-          // Fast O(1) lookup via pre-built reverse map
-          const regionIdx = regionNameToKey[name];
-          if (!regionIdx || !sortedLists[regionIdx]) { skippedNoRegionKey++; return; }
-
+          if (activation <= 0.05) return;
+          
+          let cleanName = name;
+          if (cleanName.startsWith('L_') || cleanName.startsWith('R_')) {
+              cleanName = cleanName.substring(2);
+          }
+          const networkKey = REGION_NETWORK_MAP[cleanName];
+          if (!networkKey) return;
+          
+          const regionIdxStr = regionNameToKey[name];
+          if (!regionIdxStr) return;
+          
+          const rId = parseInt(regionIdxStr) || 0;
+          if (rId === 0) return;
+          
           activeCount++;
-          const vlist = sortedLists[regionIdx];
-          // Linear count from center outward. 
-          // Color is full network color with no modulation per user request.
-          const t     = Math.min(1, Math.max(0, activation));
-          const count = Math.max(1, Math.round(t * vlist.length));
+          activeRegionsCount++;
+          if (activation > maxAct) maxAct = activation;
+          
           const netCol = networkColor(networkKey);
-          for (let j = 0; j < count; j++) {
-            colorAttr.setXYZ(vlist[j], netCol.r, netCol.g, netCol.b);
+          
+          const idx = rId * 4;
+          newData[idx + 0] = Math.round(netCol.r * 255);
+          newData[idx + 1] = Math.round(netCol.g * 255);
+          newData[idx + 2] = Math.round(netCol.b * 255);
+          const actByte = Math.round(activation * 255);
+          newData[idx + 3] = actByte;
+          
+          if (activation > 0.1 && sampleCount < 3) {
+             sampleLogs.push(`${name}(ID:${rId})=byte[${actByte}]`);
+             sampleCount++;
           }
         });
+
+        // Re-bind the freshly written buffer specifically to break detached memory reference bugs
+        sceneRef.current.paletteTex.image.data.set(newData);
+        sceneRef.current.paletteTex.needsUpdate = true;
+        
+        // --- EXTERNAL DEBUG TALLY ---
+        console.log(`[Diagnostic] Token: ${tokenIndex} | Active Regions (>0.05): ${activeRegionsCount} | Peak Activation: ${maxAct.toFixed(3)} | VRAM Samples: ${sampleLogs.join(', ')}`);
       }
 
       console.log(
         `[Brain] token=${tokenIndex} | incoming=${totalIncoming}`,
-        `| low-activation=${skippedLowActivation}`,
-        `| no-network=${skippedNoNetwork}`,
-        `| no-regionKey=${skippedNoRegionKey}`,
-        `| PAINTED=${activeCount}`
+        `| PAINTED=${activeCount}`,
+        `| Raymarching=TRUE`
       );
 
-      const debugEl = document.getElementById("debug-overlay");
-      if (debugEl) {
-        debugEl.innerText = `Token: ${tokenIndex} | Painted: ${activeCount} / ${totalIncoming}`;
-      }
-
-      colorAttr.needsUpdate = true;
+      paletteTex.needsUpdate = true;
       renderer.render(scene, camera);
     }
 
