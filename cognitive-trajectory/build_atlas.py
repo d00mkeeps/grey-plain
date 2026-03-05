@@ -176,7 +176,7 @@ for our_id in set(atlas_id_to_our_id.values()):
 
 # 4. Export to Binary Format (Dual Channel: ID, Growth)
 # We pack this into a massive 1D flat Uint8Array
-print("Exporting to binary...")
+print("Exporting atlas geometry to binary...")
 # Channel 1: Region ID (0-255)
 # Channel 2: Growth Rank (0-255)
 output_array = np.zeros(SIZE * SIZE * SIZE * 4, dtype=np.uint8)
@@ -194,3 +194,34 @@ with open(out_path, "wb") as f:
 import os
 sz = os.path.getsize(out_path) / (1024*1024)
 print(f"Done! Saved {out_path} ({sz:.2f} MB)")
+
+
+# 5. Volumetric Normals
+# Calculate smoothed 3D surface normals by taking the gradient of the solid mask
+print("Computing volumetric normals via gradient fields...")
+import scipy.ndimage as ndimage
+
+smoothed_volume = ndimage.gaussian_filter(solid_brain_mask.astype(float), sigma=2.0)
+grad_x, grad_y, grad_z = np.gradient(smoothed_volume)
+
+magnitude = np.sqrt(grad_x**2 + grad_y**2 + grad_z**2)
+magnitude[magnitude == 0] = 1.0
+
+# Inverted so vectors point outward from the solid mass
+norm_x = -grad_x / magnitude
+norm_y = -grad_y / magnitude
+norm_z = -grad_z / magnitude
+
+# Pack -1.0 to 1.0 range into 0-255 RGB bytes
+normals_array = np.zeros(SIZE * SIZE * SIZE * 4, dtype=np.uint8)
+normals_array[0::4] = np.clip((norm_x.flatten(order='F') + 1.0) / 2.0 * 255, 0, 255).astype(np.uint8)
+normals_array[1::4] = np.clip((norm_y.flatten(order='F') + 1.0) / 2.0 * 255, 0, 255).astype(np.uint8)
+normals_array[2::4] = np.clip((norm_z.flatten(order='F') + 1.0) / 2.0 * 255, 0, 255).astype(np.uint8)
+normals_array[3::4] = 255
+
+normals_out_path = "public/atlas_normals.bin"
+with open(normals_out_path, "wb") as f:
+    f.write(normals_array.tobytes())
+
+sz_norm = os.path.getsize(normals_out_path) / (1024*1024)
+print(f"Done! Saved {normals_out_path} ({sz_norm:.2f} MB)")

@@ -188,6 +188,22 @@ export default function Workspace3D({
       volumeTex.unpackAlignment = 1;
       volumeTex.needsUpdate = true;
 
+      // Pre-allocate normal map 3D Texture for lighting
+      const initialNormalsData = new Uint8Array(SIZE * SIZE * SIZE * 4);
+      // Fill the placeholder with straight-up normals (X=0, Y=0, Z=1.0) so lighting doesn't evaluate to black before load
+      for (let i = 0; i < initialNormalsData.length; i += 4) {
+         initialNormalsData[i]     = 128; // X: 0.0
+         initialNormalsData[i + 1] = 128; // Y: 0.0
+         initialNormalsData[i + 2] = 255; // Z: 1.0
+         initialNormalsData[i + 3] = 255; // W: 1.0
+      }
+      const normalsTex = new THREE.Data3DTexture(initialNormalsData, SIZE, SIZE, SIZE);
+      normalsTex.format = THREE.RGBAFormat;
+      normalsTex.type = THREE.UnsignedByteType;
+      normalsTex.minFilter = normalsTex.magFilter = THREE.NearestFilter;
+      normalsTex.unpackAlignment = 1;
+      normalsTex.needsUpdate = true;
+
       // 1D palette texture for dynamic coloring per region (max 255 regions)
       const paletteData = new Uint8Array(256 * 4); // RGBA
       const paletteTex = new THREE.DataTexture(paletteData, 256, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
@@ -215,6 +231,19 @@ export default function Workspace3D({
         })
         .catch(err => console.error("Failed to load atlas:", err));
 
+      // Fetch the pre-computed volumetric normals for structural lighting
+      fetch('/atlas_normals.bin?v=' + Date.now())
+        .then(res => res.arrayBuffer())
+        .then(buffer => {
+           normalsTex.image.data.set(new Uint8Array(buffer));
+           normalsTex.needsUpdate = true;
+           if (sceneRef.current.brainMat) {
+               sceneRef.current.brainMat.needsUpdate = true;
+           }
+           console.log(`[Raymarch] Loaded anatomical 128x128x128 normals map!`);
+        })
+        .catch(err => console.error("Failed to load normals:", err));
+
       // ─ Shader Material for Raymarching ─
       const boxGeo = new THREE.BoxGeometry(1, 1, 1);
       
@@ -234,6 +263,7 @@ export default function Workspace3D({
           precision highp float;
           precision highp sampler3D;
           uniform sampler3D map;       // RGBA 3D Atlas
+          uniform sampler3D normalMap; // 3D Prebaked Surface Normals
           uniform sampler2D palette;   // 1D Color/Activation lookup
           in vec3 vOrigin;
           in vec3 vDirection;
@@ -291,7 +321,20 @@ export default function Workspace3D({
                     float finalActiv = activ * leadEdge;
                     
                     if (finalActiv > 0.01) {
-                        result.rgb += pColor.rgb * finalActiv * 0.16;
+                        // Sample prebaked Volumetric Normal (-1.0 to 1.0 range)
+                        vec3 voxelNormal = texture(normalMap, tpos).rgb * 2.0 - 1.0;
+                        voxelNormal = normalize(voxelNormal);
+                        
+                        // Fake directional light (Top-Left-Front relative to camera space)
+                        vec3 lightDir = normalize(vec3(-1.0, 1.0, 1.0));
+                        
+                        // Lambertian diffuse
+                        float diffuse = max(dot(voxelNormal, lightDir), 0.0);
+                        
+                        // Mix ambient and dynamic diffuse lighting
+                        float lighting = 0.4 + (0.6 * diffuse);
+                        
+                        result.rgb += (pColor.rgb * lighting) * finalActiv * 0.16;
                         result.a += finalActiv * 0.16;
                     }
                  }
@@ -314,6 +357,7 @@ export default function Workspace3D({
         uniforms: {
           map: { value: volumeTex },
           palette: { value: paletteTex },
+          normalMap: { value: normalsTex },
         },
         vertexShader: vertexShader,
         fragmentShader: fragmentShader
