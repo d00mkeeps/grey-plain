@@ -88,6 +88,12 @@ export default function Workspace3D({
   const llmData = isLlmTurn ? currentTurn?.llm : null;
 
   const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [selectedRegion, setSelectedRegion] = useState(null);
+
+  // Dedicated ref so the Three.js handler can always call the latest setter
+  // without being affected by sceneRef.current being replaced on init.
+  const setRegionRef = useRef(setSelectedRegion);
+  useEffect(() => { setRegionRef.current = setSelectedRegion; });
 
   // ── Init Three.js scene (once) ───────────────────────────────────────────────
   useEffect(() => {
@@ -223,6 +229,8 @@ export default function Workspace3D({
            // R = Region ID, G = Growth Rank (0..255)
            volumeTex.image.data = volData;
            volumeTex.needsUpdate = true;
+           
+           sceneRef.current.volData = volData; // Store for CPU-side raymarching
            
            if (sceneRef.current.brainMat) {
                sceneRef.current.brainMat.needsUpdate = true;
@@ -362,15 +370,81 @@ export default function Workspace3D({
         vertexShader: vertexShader,
         fragmentShader: fragmentShader
       });
-      
+
+      // ── GPU Picking Shader ─────────────────────────────────────────────────────
+      // Renders region ID as encoded color into an offscreen buffer.
+      // On click we read the single pixel under the mouse — R channel = region ID.
+      // This is the only reliable approach for BackSide raymarching volumes.
+      const pickingFragmentShader = `
+          precision highp float;
+          precision highp sampler3D;
+          uniform sampler3D map;
+          in vec3 vOrigin;
+          in vec3 vDirection;
+          out vec4 color;
+
+          vec2 hitBox( vec3 orig, vec3 dir ) {
+            vec3 box_min = vec3( -0.5 );
+            vec3 box_max = vec3( 0.5 );
+            vec3 inv_dir = 1.0 / dir;
+            vec3 tmin_tmp = ( box_min - orig ) * inv_dir;
+            vec3 tmax_tmp = ( box_max - orig ) * inv_dir;
+            vec3 tmin = min( tmin_tmp, tmax_tmp );
+            vec3 tmax = max( tmin_tmp, tmax_tmp );
+            float t0 = max( tmin.x, max( tmin.y, tmin.z ) );
+            float t1 = min( tmax.x, min( tmax.y, tmax.z ) );
+            return vec2( t0, t1 );
+          }
+
+          void main(){
+            vec3 rayDir = normalize(vDirection);
+            vec2 bounds = hitBox(vOrigin, rayDir);
+            if (bounds.x > bounds.y) discard;
+            bounds.x = max(bounds.x, 0.0);
+            vec3 p = vOrigin + bounds.x * rayDir;
+            vec3 inc = 1.0 / abs(rayDir);
+            float delta = min(inc.x, min(inc.y, inc.z)) / 128.0;
+            vec3 dirStep = rayDir * delta;
+            for (int i = 0; i < 400; i++) {
+              p += dirStep;
+              vec3 tpos = p + vec3(0.5);
+              if (tpos.x < 0.0 || tpos.y < 0.0 || tpos.z < 0.0 ||
+                  tpos.x > 1.0 || tpos.y > 1.0 || tpos.z > 1.0) break;
+              float rId = floor(texture(map, tpos).r * 255.0 + 0.5);
+              if (rId > 0.0) {
+                // Encode rId in both R and G — robust to RGBA/BGRA driver swaps.
+                // A=1.0 is our sentinel meaning "voxel was hit".
+                color = vec4(rId / 255.0, rId / 255.0, 0.0, 1.0);
+                return;
+              }
+            }
+            // Nothing hit — transparent black
+            color = vec4(0.0);
+          }
+        `;
+
+      const pickingMat = new THREE.ShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        side: THREE.BackSide,
+        uniforms: {
+          map: { value: volumeTex },
+        },
+        vertexShader: vertexShader,
+        fragmentShader: pickingFragmentShader,
+      });
+
+      const pickTarget = new THREE.WebGLRenderTarget(1, 1);
+      sceneRef.current.pickingMat = pickingMat;
+      sceneRef.current.pickTarget  = pickTarget;
+
       const brainMesh = new THREE.Mesh(boxGeo, brainMat);
       // Scale to dimensions of voxel grid, position at center
       brainMesh.scale.set(maxDim, maxDim, maxDim);
       brainMesh.position.set(minX + maxDim/2, minY + maxDim/2, minZ + maxDim/2);
       brainGroup.add(brainMesh);
       sceneRef.current.brainMesh = brainMesh;
-      
-      console.log(`[Raymarch Debug] brainMesh positioned at: ${brainMesh.position.x.toFixed(1)}, ${brainMesh.position.y.toFixed(1)}, ${brainMesh.position.z.toFixed(1)} with scale: ${brainMesh.scale.x.toFixed(1)}`);
+
+      console.log(`[Raymarch Debug] brainMesh at: ${brainMesh.position.x.toFixed(1)}, ${brainMesh.position.y.toFixed(1)}, ${brainMesh.position.z.toFixed(1)} scale: ${brainMesh.scale.x.toFixed(1)}`);
 
       // ─ Detailed Outlines (Faint shell) ─
       // Hologram wireframe of the outer boundaries
@@ -498,6 +572,104 @@ export default function Workspace3D({
       controls.target.set(0, 0, 0);
     };
 
+
+
+    // ── Click vs drag detection ────────────────────────────────────────────────
+    // Run the GPU pick only when the pointer barely moved — i.e. a deliberate
+    // "tap" rather than an orbit drag. 5px threshold feels right in practice.
+    const PICK_THRESHOLD_PX = 5;
+    let pointerDownAt = null;
+
+    const onPointerDown = (event) => {
+      if (event.button !== 0) return;
+      pointerDownAt = { x: event.clientX, y: event.clientY };
+    };
+
+    const onPointerUp = (event) => {
+      if (event.button !== 0 || !pointerDownAt) return;
+      const dx = event.clientX - pointerDownAt.x;
+      const dy = event.clientY - pointerDownAt.y;
+      pointerDownAt = null;
+      if (Math.sqrt(dx * dx + dy * dy) > PICK_THRESHOLD_PX) return; // was a drag
+
+      const { brainMesh, pickingMat, pickTarget, regionNameToKey } = sceneRef.current;
+      if (!brainMesh || !pickingMat || !pickTarget) return;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      const px = Math.round(event.clientX - rect.left);
+      const py = Math.round(event.clientY - rect.top);
+
+      // ── GPU Picking pass ──────────────────────────────────────────────────────
+      const tmpMesh = new THREE.Mesh(brainMesh.geometry, pickingMat);
+      tmpMesh.matrixAutoUpdate = false;
+      brainMesh.updateWorldMatrix(true, false);
+      tmpMesh.matrix.copy(brainMesh.matrixWorld);
+      tmpMesh.matrixWorld.copy(brainMesh.matrixWorld);
+      const tmpScene = new THREE.Scene();
+      tmpScene.add(tmpMesh);
+
+      const pixel = new Uint8Array(4);
+      try {
+        renderer.setRenderTarget(pickTarget);
+        camera.setViewOffset(rect.width, rect.height, px, py, 1, 1);
+        renderer.render(tmpScene, camera);
+        renderer.readRenderTargetPixels(pickTarget, 0, 0, 1, 1, pixel);
+      } finally {
+        // Always restore — a stale setViewOffset causes the whole scene
+        // to render into a 1×1 viewport and appear completely blank.
+        camera.clearViewOffset();
+        camera.updateProjectionMatrix();
+        renderer.setRenderTarget(null);
+      }
+
+
+      if (pixel[3] === 255 && (pixel[0] > 0 || pixel[1] > 0)) {
+        const rId = pixel[0] > 0 ? pixel[0] : pixel[1];
+        let foundName = 'Unknown';
+        if (regionNameToKey) {
+          for (const [name, key] of Object.entries(regionNameToKey)) {
+            if (parseInt(key) === rId) { foundName = name; break; }
+          }
+        }
+
+        // Derive hemisphere and clean name
+        let cleanName = foundName;
+        let hemisphere = null;
+        if (cleanName.startsWith('L_')) { hemisphere = 'Left';  cleanName = cleanName.slice(2); }
+        else if (cleanName.startsWith('R_')) { hemisphere = 'Right'; cleanName = cleanName.slice(2); }
+
+        // Network membership
+        const networkKey = REGION_NETWORK_MAP[cleanName];
+        const network    = networkKey ? NETWORKS[networkKey] : null;
+
+        // Live activation from the palette (A channel written each token)
+        const paletteData  = sceneRef.current.paletteData;
+        const activationRaw = paletteData ? paletteData[rId * 4 + 3] : 0;
+        const activation    = activationRaw / 255;
+
+        const displayName = cleanName.replace(/_/g, ' ');
+
+        console.log(
+          `%c[Brain] Tapped → ${displayName}${hemisphere ? ' (' + hemisphere[0] + ')' : ''} | ${network?.label ?? 'Unmapped'} | act=${(activation * 100).toFixed(0)}%`,
+          'color: #00ff00; font-weight: bold; font-size: 13px; background: #111; padding: 2px 8px; border-radius: 4px;'
+        );
+
+        setRegionRef.current({
+          rId,
+          displayName,
+          rawName: foundName,
+          hemisphere,
+          networkKey,
+          networkLabel: network?.label ?? null,
+          networkColor: network?.color ?? '#8a9ab0',
+          activation,
+        });
+      }
+    };
+
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointerup', onPointerUp);
+
     const onResize = () => {
       camera.aspect = mount.clientWidth / mount.clientHeight;
       camera.updateProjectionMatrix();
@@ -508,6 +680,8 @@ export default function Workspace3D({
     return () => {
       cancelAnimationFrame(rafId);
       window.removeEventListener("resize", onResize);
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointerup', onPointerUp);
       renderer.dispose();
       if (mount.contains(renderer.domElement))
         mount.removeChild(renderer.domElement);
@@ -628,34 +802,128 @@ export default function Workspace3D({
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      <div
-        style={{
+
+      {/* ── Region Info Card ─────────────────────────────────────────────── */}
+      {selectedRegion && (
+        <div style={{
           position: "absolute",
           top: "16px",
-          right: "16px",
-          color: "#8a9ab0",
+          left: "16px",
+          zIndex: 20,
+          width: "220px",
+          background: "rgba(12, 16, 28, 0.82)",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+          border: `1px solid ${selectedRegion.networkColor}44`,
+          borderRadius: "12px",
+          padding: "14px 16px 16px",
           fontFamily: "Inter, sans-serif",
-          fontSize: "14px",
-          pointerEvents: "none",
-          zIndex: 10,
-        }}
-      >
+          color: "#e2e8f0",
+          boxShadow: `0 0 24px ${selectedRegion.networkColor}22, 0 4px 20px rgba(0,0,0,0.5)`,
+          animation: "fadeSlideIn 0.2s ease",
+        }}>
+          {/* Header row */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "10px" }}>
+            <div style={{ flex: 1, paddingRight: "8px" }}>
+              <div style={{ fontSize: "13px", fontWeight: 600, lineHeight: 1.35, color: "#f0f4ff" }}>
+                {selectedRegion.displayName}
+              </div>
+              {selectedRegion.hemisphere && (
+                <div style={{
+                  display: "inline-block",
+                  marginTop: "4px",
+                  fontSize: "10px",
+                  fontWeight: 600,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  color: "#94a3b8",
+                  background: "rgba(255,255,255,0.07)",
+                  borderRadius: "4px",
+                  padding: "1px 6px",
+                }}>
+                  {selectedRegion.hemisphere}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => setSelectedRegion(null)}
+              style={{
+                background: "none", border: "none", cursor: "pointer",
+                color: "#64748b", fontSize: "16px", lineHeight: 1,
+                padding: "0", marginTop: "-2px", flexShrink: 0,
+              }}
+              title="Dismiss"
+            >×</button>
+          </div>
+
+          {/* Network row */}
+          {selectedRegion.networkLabel && (
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "12px" }}>
+              <div style={{
+                width: "8px", height: "8px", borderRadius: "50%",
+                background: selectedRegion.networkColor,
+                boxShadow: `0 0 6px ${selectedRegion.networkColor}`,
+                flexShrink: 0,
+              }} />
+              <span style={{ fontSize: "11px", color: "#94a3b8", letterSpacing: "0.03em" }}>
+                {selectedRegion.networkLabel} Network
+              </span>
+            </div>
+          )}
+
+          {/* Activation */}
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "5px" }}>
+              <span style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.07em", color: "#64748b" }}>
+                Activation
+              </span>
+              <span style={{ fontSize: "11px", fontWeight: 600, color: selectedRegion.networkColor }}>
+                {selectedRegion.activation > 0
+                  ? `${(selectedRegion.activation * 100).toFixed(0)}%`
+                  : "—"}
+              </span>
+            </div>
+            <div style={{
+              height: "4px", borderRadius: "2px",
+              background: "rgba(255,255,255,0.08)",
+              overflow: "hidden",
+            }}>
+              <div style={{
+                height: "100%",
+                width: `${selectedRegion.activation * 100}%`,
+                borderRadius: "2px",
+                background: `linear-gradient(90deg, ${selectedRegion.networkColor}99, ${selectedRegion.networkColor})`,
+                transition: "width 0.4s ease",
+              }} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Keyframe for card entrance */}
+      <style>{`
+        @keyframes fadeSlideIn {
+          from { opacity: 0; transform: translateY(-6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+
+      {/* Top-right label */}
+      <div style={{
+        position: "absolute", top: "16px", right: "16px",
+        color: "#8a9ab0", fontFamily: "Inter, sans-serif",
+        fontSize: "14px", pointerEvents: "none", zIndex: 10,
+      }}>
         Relative activation — normalised for observability
       </div>
+
       <div
-        style={{
-          position: "absolute",
-          top: "40px",
-          right: "16px",
-          color: "#ff0000",
-          fontFamily: "Inter, sans-serif",
-          fontSize: "14px",
-          pointerEvents: "none",
-          zIndex: 10,
-        }}
+        style={{ position: "absolute", top: "40px", right: "16px",
+          color: "#ff0000", fontFamily: "Inter, sans-serif",
+          fontSize: "14px", pointerEvents: "none", zIndex: 10 }}
         id="debug-overlay"
-      >
-      </div>
+      />
+
       <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
     </div>
   );
