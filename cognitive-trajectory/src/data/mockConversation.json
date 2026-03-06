@@ -1,9 +1,0 @@
-[
-  {
-    "index": 0,
-    "speaker": "human",
-    "text": "This is a fallback conversation. The actual mock data was overwritten to save space in the bundle.",
-    "human": null,
-    "llm": null
-  }
-]
