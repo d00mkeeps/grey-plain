@@ -1,6 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
+import { MessageText } from './ChatInterface'
 
 export default function ConversationTimeline({
+  availableConversations = [],
+  selectedConvoId,
+  onSelectConversation,
+
   conversation,
   currentIndex,
   currentTokenIndex,
@@ -27,6 +32,44 @@ export default function ConversationTimeline({
       fontFamily: "'Inter', sans-serif",
       boxSizing:  'border-box',
     }}>
+
+      {/* Conversation selector */}
+      <div style={{
+        padding:      '12px 16px',
+        borderBottom: '1px solid #151e2a',
+        flexShrink:   0,
+        display:      'flex',
+        alignItems:   'center',
+        gap:          12,
+      }}>
+        <div style={{ fontSize: 10, color: '#3a6a9a', textTransform: 'uppercase', letterSpacing: 1 }}>
+          Session:
+        </div>
+        <select
+          value={selectedConvoId}
+          onChange={(e) => onSelectConversation(e.target.value)}
+          style={{
+            flex:         1,
+            background:   '#0e1520',
+            border:       '1px solid #1a3a5a',
+            borderRadius: 4,
+            color:        '#c8d8f0',
+            padding:      '6px 8px',
+            fontSize:     12,
+            outline:      'none',
+            cursor:       'pointer',
+          }}
+        >
+          {selectedConvoId === 'Just Replayed' && (
+            <option value="Just Replayed" disabled>Unsaved Session (Just Replayed)</option>
+          )}
+          {availableConversations.map(c => (
+             <option key={c.id} value={c.id}>
+               {c.id.replace('conversation_', '').replace(/_/g, ' ').replace(/-/g, ':')}
+             </option>
+          ))}
+        </select>
+      </div>
 
       {/* Playback controls */}
       <div style={{
@@ -104,12 +147,8 @@ export default function ConversationTimeline({
                 fontSize:   13,
                 color:      isActive ? '#c8d8f0' : '#6a8aaa',
                 lineHeight: 1.5,
-                overflow:   'hidden',
-                display:    '-webkit-box',
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
               }}>
-                {turn.text}
+                <MessageText text={turn.text} isStreaming={false} />
               </div>
 
               {/* Token scrubber — shown for active turns with tokens */}

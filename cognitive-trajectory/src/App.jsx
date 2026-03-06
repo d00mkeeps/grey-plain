@@ -7,9 +7,24 @@ import { NETWORKS } from './constants/networks'
 const TURN_DURATION_MS  = 2800
 const TOKEN_INTERVAL_MS = 180
 
+// Load all available conversations dynamically via Vite
+const conversationFiles = import.meta.glob('./data/conversation_*.json', { eager: true })
+const availableConversations = Object.entries(conversationFiles)
+  .map(([path, module]) => ({
+    id: path.split('/').pop().replace('.json', ''),
+    data: module.default,
+  }))
+  .sort((a, b) => b.id.localeCompare(a.id)) // Newest first
+
+// Fallback to mock if nothing is saved yet
+const defaultConvos = availableConversations.length > 0 
+  ? availableConversations 
+  : [{ id: 'mockConversation', data: mockData }]
+
 export default function App() {
   // ── Playback mode state ────────────────────────────────────────────────────
-  const [playbackConversation, setPlaybackConversation] = useState(mockData)
+  const [selectedConvoId, setselectedConvoId] = useState(defaultConvos[0].id)
+  const [playbackConversation, setPlaybackConversation] = useState(defaultConvos[0].data)
   const [turnIndex,   setTurnIndex]   = useState(0)
   const [tokenIndex,  setTokenIndex]  = useState(0)
   const [isPlaying,   setIsPlaying]   = useState(false)
@@ -18,7 +33,14 @@ export default function App() {
   // ── Chat mode state ────────────────────────────────────────────────────────
   const [liveTurn, setLiveTurn] = useState(null)
 
-  const [activeTab, setActiveTab] = useState('chat')
+  const [activeTab, setActiveTab] = useState('docs')
+
+  // Dispatch a resize event after the grid-template-columns transition (300ms)
+  // so Three.js re-measures the canvas container and clears the black strip.
+  useEffect(() => {
+    const t = setTimeout(() => window.dispatchEvent(new Event('resize')), 320)
+    return () => clearTimeout(t)
+  }, [activeTab])
 
   // ── Which turn feeds Workspace3D ───────────────────────────────────────────
   // liveTurn takes priority when it exists (chat mode active)
@@ -27,8 +49,8 @@ export default function App() {
   const currentTurn   = activeTab === 'chat' ? (liveTurn ?? playbackTurn) : playbackTurn
 
   const displayTokenIndex = (activeTab === 'chat' && liveTurn)
-    ? (liveTurn.speaker === 'llm' 
-        ? Math.max(0, (liveTurn.llm?.tokens?.length || 1) - 1) 
+    ? (liveTurn.speaker === 'llm'
+        ? Math.max(0, (liveTurn.llm?.tokens?.length || 1) - 1)
         : Math.max(0, (liveTurn.human?.tokens?.length || 1) - 1))
     : tokenIndex
 
@@ -87,13 +109,27 @@ export default function App() {
   }
 
   const handleReplayReady = (enrichedConversation) => {
-    // Load replay data, switch to playback tab, reset to start
+    // When a replay finishes, we switch to it immediately as the active playback
+    // (Note: it will also be saved to disk by the API, so a hard refresh will load it into the list)
     setPlaybackConversation(enrichedConversation)
+    setselectedConvoId('Just Replayed')
     setTurnIndex(0)
     setTokenIndex(0)
     setLiveTurn(null)
     setIsPlaying(false)
     setActiveTab('playback')
+  }
+
+  const handleSelectConversation = (id) => {
+    const convo = defaultConvos.find(c => c.id === id)
+    if (convo) {
+      setselectedConvoId(id)
+      setPlaybackConversation(convo.data)
+      setTurnIndex(0)
+      setTokenIndex(0)
+      setLiveTurn(null)
+      setIsPlaying(false)
+    }
   }
 
   return (
@@ -102,7 +138,8 @@ export default function App() {
       height:     '100vh',
       background: '#060810',
       display:    'grid',
-      gridTemplateColumns: '1fr 340px',
+      gridTemplateColumns: activeTab === 'docs' ? '30% 70%' : '1fr 340px',
+      transition: 'grid-template-columns 0.3s ease',
       gridTemplateRows:    '48px 1fr',
       fontFamily: "'Inter', sans-serif",
       color:      '#c8d8f0',
@@ -169,6 +206,12 @@ export default function App() {
       <RightPanel
         activeTab={activeTab}
         onTabChange={setActiveTab}
+        
+        // Playback list
+        availableConversations={defaultConvos}
+        selectedConvoId={selectedConvoId}
+        onSelectConversation={handleSelectConversation}
+
         conversation={playbackConversation}
         currentIndex={turnIndex}
         currentTokenIndex={tokenIndex}

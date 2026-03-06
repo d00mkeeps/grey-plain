@@ -5,7 +5,7 @@ import ThinkingAnimation from './ThinkingAnimation'
 const CHAT_URL = 'https://d00mkeeps--cognitive-trajectory-inferencemodel-chat.modal.run'
 const REPLAY_URL = 'https://d00mkeeps--cognitive-trajectory-inferencemodel-replay.modal.run'
 
-function MessageText({ text, isStreaming, onExpand }) {
+export function MessageText({ text, isStreaming, onExpand }) {
   const [expanded, setExpanded] = useState(false)
   const MAX_LEN = 280
   const isLong = text.length > MAX_LEN
@@ -197,8 +197,31 @@ export default function ChatInterface({ onReplayReady, onLiveTurn }) {
     setIsReplaying(true)
 
     try {
+      // 1. Headless auto-save to local src/data folder FIRST
+      // This way we don't lose the raw conversation if Modal times out
+      try {
+        await fetch('http://localhost:8001/save', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+             conversation: messages.map((m, i) => ({
+               index: i,
+               speaker: m.speaker,
+               text: m.text,
+               human: null,
+               llm: null
+             }))
+          })
+        })
+      } catch (err) {
+        console.warn('Auto-save failed (make sure save_api.py is running):', err)
+        alert('Could not auto-save to src/data/. Is save_api.py running?')
+      }
+
+      // 2. Get enriched replay from Modal
       const res = await fetch(REPLAY_URL, {
         method:  'POST',
+        mode:    'cors',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
           conversation: messages.map(m => ({ speaker: m.speaker, text: m.text }))
@@ -206,8 +229,21 @@ export default function ChatInterface({ onReplayReady, onLiveTurn }) {
       })
       const data = await res.json()
       onReplayReady(data.conversation)
+
+      // 3. Overwrite the raw save with the enriched data
+      try {
+        await fetch('http://localhost:8001/save', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ conversation: data.conversation })
+        })
+      } catch (err) {
+        console.warn('Enriched auto-save failed:', err)
+      }
+
     } catch (err) {
       console.error('Replay error:', err)
+      alert('Modal replay failed or timed out. Your raw conversation was still saved locally.')
     } finally {
       setIsReplaying(false)
     }
@@ -349,7 +385,7 @@ export default function ChatInterface({ onReplayReady, onLiveTurn }) {
               letterSpacing: 1,
             }}
           >
-            {isReplaying ? 'PROCESSING...' : '⟳ REPLAY CONVERSATION'}
+            {isReplaying ? 'PROCESSING REPLAY & AUTO-SAVING...' : '⟳ REPLAY & AUTO-SAVE'}
           </button>
         </div>
       )}

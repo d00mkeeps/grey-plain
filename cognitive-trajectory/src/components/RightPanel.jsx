@@ -1,5 +1,6 @@
 import ConversationTimeline from './ConversationTimeline'
 import ChatInterface        from './ChatInterface'
+import DocsPanel            from './DocsPanel'
 
 const TAB_STYLE = (active) => ({
   flex:          1,
@@ -18,6 +19,11 @@ const TAB_STYLE = (active) => ({
 export default function RightPanel({
   activeTab,
   onTabChange,
+  // playback list props
+  availableConversations,
+  selectedConvoId,
+  onSelectConversation,
+
   // playback props
   conversation,
   currentIndex,
@@ -27,6 +33,7 @@ export default function RightPanel({
   onPlay,
   onPause,
   onScrubToken,
+
   // chat props
   onLiveTurn,
   onReplayReady,
@@ -48,9 +55,9 @@ export default function RightPanel({
         borderBottom: '1px solid #0e1a2a',
         flexShrink:   0,
       }}>
-        <button style={TAB_STYLE(activeTab === 'chat')}
-          onClick={() => onTabChange('chat')}>
-          Chat
+        <button style={TAB_STYLE(activeTab === 'docs')}
+          onClick={() => onTabChange('docs')}>
+          How It Works
         </button>
         <button style={TAB_STYLE(activeTab === 'playback')}
           onClick={() => onTabChange('playback')}>
@@ -60,13 +67,14 @@ export default function RightPanel({
 
       {/* Panel content */}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        {activeTab === 'chat' ? (
-          <ChatInterface
-            onLiveTurn={onLiveTurn}
-            onReplayReady={onReplayReady}
-          />
+        {activeTab === 'docs' ? (
+          <DocsPanel />
         ) : (
           <ConversationTimeline
+            availableConversations={availableConversations}
+            selectedConvoId={selectedConvoId}
+            onSelectConversation={onSelectConversation}
+            
             conversation={conversation}
             currentIndex={currentIndex}
             currentTokenIndex={currentTokenIndex}

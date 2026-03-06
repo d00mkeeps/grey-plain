@@ -402,7 +402,7 @@ class InferenceModel:
 
     # ── /replay endpoint ───────────────────────────────────────────────────────
 
-    @modal.fastapi_endpoint(method="POST")
+    @modal.fastapi_endpoint(method="POST", timeout=300)
     async def replay(self, request: dict):
         """
         Process completed conversation, return enriched turns in mock contract shape.

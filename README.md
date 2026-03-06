@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-The Cognitive Trajectory Visualiser is a research prototype that simultaneously displays the internal representational states of a human brain and a large language model (LLM) during live conversation. It is a **measurement tool**, not a demonstration of a known effect.
+The Cognitive Trajectory Visualiser models an AI's cognitive activation and predicts human brain activity during response. It is a **measurement tool**, not a demonstration of a known effect.
 
 The system maps natural language conversation onto two parallel visualisations:
 
@@ -202,6 +202,10 @@ Regression weights were projected back to full dimensional space (`weights @ pca
 
 **Visualisation approach:** Vertex colours mapped to predicted activation levels. Active regions pulse between 75–100% brightness using a sine wave in the animation loop (`pulse = 0.5 + 0.5 * sin(Date.now() / 900)`). Partial fill growing outward from region centroid gives a sense of graded activation rather than binary on/off.
 
+**GPU picking:** Brain regions are made clickable via GPU picking. An offscreen render pass draws each region in a unique flat colour encoding its region ID into the RGB channels. On click, a 1×1 pixel readback identifies the region under the cursor. This is more reliable than Three.js raycasting on a high-vertex irregular mesh.
+
+**Volumetric lighting:** Directional shading is driven by a prebaked 3D normal field (`atlas_normals.bin`) — a 128³ RGBA volume where each voxel stores the outward surface normal of the nearest cortex boundary, computed via Gaussian-smoothed gradient of the solid brain mask. This gives interior regions plausible lighting without requiring mesh normals.
+
 ---
 
 ## 7. Inference Pipeline
@@ -230,11 +234,32 @@ Takes completed conversation. For each human turn: n forward passes (one per pro
 
 **Development:** Stub API (FastAPI, localhost:8000) with heuristic activation generation — keyword-based network detection, bell-curve layer activations, seeded random brain activations. Realistic shape, no real inference.
 
-**Production:** Modal (serverless GPU), A10G instance, `container_idle_timeout=300`. Model cached in Modal Volume after first download (~16GB, ~10 minutes first time). PCA, weights, and region names loaded from Modal Volume at container startup.
+**Production (hosted prototype):** Live inference is intentionally **disabled** in the hosted version. The `/chat` and `/replay` endpoints are not exposed. Modal is not running. There is no ongoing GPU cost. Users interact exclusively through **playback of pre-recorded conversations** — the `mockConversation.json` dataset that was generated offline. This keeps the prototype freely hostable indefinitely without inference spend.
+
+**Inference capability:** The full inference pipeline (Modal, A10G, streaming `/chat`) is implemented and was used to generate the playback dataset. It can be re-enabled for a private session or future study by restoring the Modal deployment and wiring `ChatInterface.jsx` back into the tab bar.
 
 ---
 
 ## 8. System Architecture
+
+### 8.1 Hosted (Playback-only)
+
+```
+mockConversation.json  (pre-recorded, generated offline via inference pipeline)
+    │
+    ▼
+App.jsx (playbackConversation state)
+    │
+    ▼
+ConversationTimeline.jsx  — turn scrubber, play/pause
+    │
+    ▼
+Workspace3D.jsx
+    ├─ BrainMesh — vertex colours from regionActivations
+    └─ LLM cylinder stack — fill opacity/colour from layerActivations
+```
+
+### 8.2 Full Inference (Development / Future)
 
 ```
 User message
@@ -326,6 +351,8 @@ Stories from different sessions were concatenated without session-level nuisance
 | Hosting                  | Vast.ai vs Modal                                                       | Modal for production, Vast for training | Modal handles scaling and idle cost; Vast better for sustained batch jobs  |
 | Real-time vs Replay      | Live token-by-token vs post-hoc replay                                 | Both                                    | /chat streams LLM in real-time; /replay does human token-by-token post-hoc |
 | Serving framework        | Raw transformers vs vLLM                                               | Raw transformers                        | Sufficient for prototype; vLLM needed at scale                             |
+| Region click detection   | Three.js raycaster vs GPU picking                                      | GPU picking (offscreen atlas render)    | Raycaster unreliable on 160k-vertex irregular mesh; GPU readback is exact  |
+| Volumetric normals       | Mesh surface normals only vs prebaked 3D gradient field                | Prebaked 3D gradient field              | Atlas volume lacks usable mesh normals; gradient of solid mask is cheaper  |
 
 ---
 
@@ -342,6 +369,10 @@ Stories from different sessions were concatenated without session-level nuisance
 **fsaverage5 faceted appearance:** Initial brain export at fsaverage5 resolution (~20k vertices) appeared low-resolution. Fixed by upgrading to full fsaverage (~160k vertices).
 
 **HF token access in Modal:** Secret must be passed both to `modal.Secret.from_name()` in the decorator and explicitly to `from_pretrained()` calls. Not obvious from documentation.
+
+**Atlas coordinate space mismatch:** The Destrieux NIfTI atlas is in RAS voxel space; the JavaScript bounding box is in MNI world coordinates. Initial sampling produced a badly misaligned volume. Fixed in `build_atlas.py` by applying the inverse NIfTI affine to convert each 128³ grid point from MNI coordinates to voxel indices before lookup.
+
+**GPU picking channel bleed:** The offscreen picking render target was compositing the LLM cylinder stack and other scene objects alongside the brain mesh, producing garbage region ID readbacks. Fixed by isolating the pick pass to render only the brain mesh geometry with the flat-colour picking shader.
 
 ---
 
@@ -493,36 +524,36 @@ Formalise the "alignment" concept as a scalar metric computed from the overlap b
 
 ```
 /
-├── cognitive-trajectory/          # React visualiser frontend
+├── cognitive-trajectory/              # React visualiser frontend
 │   ├── src/
 │   │   ├── App.jsx
 │   │   ├── components/
 │   │   │   ├── Workspace3D.jsx        # Three.js brain + LLM stack
 │   │   │   ├── ConversationTimeline.jsx
 │   │   │   ├── ChatInterface.jsx
+│   │   │   ├── DocsPanel.jsx          # Inline docs tab
+│   │   │   ├── ThinkingAnimation.jsx  # Three.js icosahedron loading indicator
 │   │   │   └── RightPanel.jsx         # Tab wrapper
-│   │   ├── constants/networks.js      # Network colours + region map
+│   │   ├── constants/networks.js      # Network colours + region assignments
 │   │   └── data/
 │   │       ├── mockConversation.json
 │   │       └── layer_network_map.json
-│   └── public/
-│       ├── brain.json                 # fsaverage mesh
-│       ├── regionMap.json             # Destrieux parcellation
-│       └── model/
-│           ├── pca.pkl                # PCA (200 components)
-│           ├── weights.h5             # Ridge regression weights
-│           └── region_names.json
-├── server/
-│   ├── stub_api.py                    # Local development stub
-│   └── inference_api.py              # Modal production inference
+│   ├── public/
+│   │   ├── brain.json                 # fsaverage mesh (~160k vertices)
+│   │   ├── regionMap.json             # Destrieux parcellation (75 regions)
+│   │   ├── atlas_volume.bin           # 128³ RGBA: R=region ID, G=growth rank
+│   │   ├── atlas_normals.bin          # 128³ RGBA: prebaked surface normals
+│   │   └── model/
+│   │       ├── pca.pkl                # PCA (200 components)
+│   │       ├── weights.h5             # Ridge regression weights
+│   │       └── region_names.json
+│   └── build_atlas.py                 # Generates atlas_volume.bin + atlas_normals.bin
 ├── phase4/
-│   ├── download_data.sh              # OpenNeuro data download
-│   ├── parse_textgrids.py            # TextGrid word extraction
-│   ├── extract_hidden_states.py      # Llama hidden state extraction
-│   └── train_regression.py           # Ridge regression training
-├── scripts/
-│   └── export_brain.py               # FreeSurfer mesh export
-└── docs/
-    ├── research.md                    # This document
-    └── methodology.md                 # Encoding model technical detail
+│   ├── download_data.sh               # OpenNeuro data download
+│   ├── parse_textgrids.py             # TextGrid word extraction
+│   ├── extract_hidden_states.py       # Llama hidden state extraction
+│   └── train_regression.py            # Ridge regression training
+└── scripts/
+    ├── export_brain.py                # FreeSurfer mesh export
+    └── update_mock.py                 # Backfills token activations in mockConversation.json
 ```
