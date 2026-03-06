@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Workspace3D from './components/Workspace3D'
 import RightPanel  from './components/RightPanel'
-import mockData    from './data/mockConversation.json'
 import { NETWORKS } from './constants/networks'
 
 const TURN_DURATION_MS  = 2800
@@ -16,10 +15,10 @@ const availableConversations = Object.entries(conversationFiles)
   }))
   .sort((a, b) => b.id.localeCompare(a.id)) // Newest first
 
-// Fallback to mock if nothing is saved yet
+// Fallback to empty if nothing is saved yet
 const defaultConvos = availableConversations.length > 0 
   ? availableConversations 
-  : [{ id: 'mockConversation', data: mockData }]
+  : [{ id: 'empty', data: [] }]
 
 export default function App() {
   // ── Playback mode state ────────────────────────────────────────────────────
