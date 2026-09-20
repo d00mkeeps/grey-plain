@@ -73,45 +73,6 @@ function createTextSprite(text) {
   return sprite;
 }
 
-async function fetchWithProgress(url, onChunk, responseType = 'json') {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Failed to load ${url}: ${response.statusText}`);
-  
-  const contentLength = response.headers.get('content-length');
-  const total = contentLength ? parseInt(contentLength, 10) : 0;
-  
-  if (!response.body) {
-    if (responseType === 'json') return response.json();
-    return response.arrayBuffer();
-  }
-
-  const reader = response.body.getReader();
-  let received = 0;
-  const chunks = [];
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    received += value.length;
-    if (onChunk) onChunk(value.length, received, total);
-  }
-
-  const allChunks = new Uint8Array(received);
-  let pos = 0;
-  for (const chunk of chunks) {
-    allChunks.set(chunk, pos);
-    pos += chunk.length;
-  }
-
-  if (responseType === 'json') {
-    const text = new TextDecoder('utf-8').decode(allChunks);
-    return JSON.parse(text);
-  } else {
-    return allChunks.buffer;
-  }
-}
-
 export default function Workspace3D({
   currentTurn,
   tokenIndex,
@@ -127,9 +88,6 @@ export default function Workspace3D({
   const llmData = isLlmTurn ? currentTurn?.llm : null;
 
   const [modelsLoaded, setModelsLoaded] = useState(false);
-  const [loadProgress, setLoadProgress] = useState(0);
-  const [loadStage, setLoadStage] = useState('STREAMING VOXEL MESH...');
-  const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [selectedRegion, setSelectedRegion] = useState(null);
 
   // Dedicated ref so the Three.js handler can always call the latest setter
@@ -186,37 +144,12 @@ export default function Workspace3D({
     sceneRef.current.humanSprite = humanSprite;
     sceneRef.current.targetHumanColor = new THREE.Color("#3a5a7a");
 
-    const loadedSizes = { brain: 0, regionMap: 0, volume: 0, normals: 0 };
-    const TOTAL_EXPECTED = 60 * 1024 * 1024; // ~60MB estimated total
-
-    const updateOverallProgress = () => {
-      const totalDownloaded = loadedSizes.brain + loadedSizes.regionMap + loadedSizes.volume + loadedSizes.normals;
-      setDownloadedBytes(totalDownloaded);
-      const pct = Math.min(98, Math.max(1, Math.round((totalDownloaded / TOTAL_EXPECTED) * 100)));
-      setLoadProgress(pct);
-      setLoadStage(`STREAMING MESH // VOXELS`);
-    };
-
     Promise.all([
-      fetchWithProgress("/brain.json", (delta) => {
-        loadedSizes.brain += delta;
-        updateOverallProgress();
-      }, 'json'),
-      fetchWithProgress("/regionMap.json", (delta) => {
-        loadedSizes.regionMap += delta;
-        updateOverallProgress();
-      }, 'json'),
-      fetchWithProgress('/atlas_volume.bin?v=' + Date.now(), (delta) => {
-        loadedSizes.volume += delta;
-        updateOverallProgress();
-      }, 'buffer'),
-      fetchWithProgress('/atlas_normals.bin?v=' + Date.now(), (delta) => {
-        loadedSizes.normals += delta;
-        updateOverallProgress();
-      }, 'buffer'),
+      fetch("/brain.json").then((r) => r.json()),
+      fetch("/regionMap.json").then((r) => r.json()),
+      fetch('/atlas_volume.bin?v=' + Date.now()).then((r) => r.arrayBuffer()),
+      fetch('/atlas_normals.bin?v=' + Date.now()).then((r) => r.arrayBuffer()),
     ]).then(([brainData, regionMap, volBuffer, normalsBuffer]) => {
-      setLoadStage("COMPILING SHADERS...");
-      setLoadProgress(99);
 
       const { vertices } = brainData;
 
@@ -496,11 +429,7 @@ export default function Workspace3D({
       sceneRef.current.regionMap = regionMap;
       sceneRef.current.regionNameToKey = regionNameToKey;
       console.log('[Brain] Loaded. Rayserizer done. Regions in map:', Object.keys(regionMap).length);
-      setLoadProgress(100);
-      setLoadStage("ONLINE");
-      setTimeout(() => {
-        setModelsLoaded(true);
-      }, 350);
+      setModelsLoaded(true);
     });
 
     // ── LLM Stack ─────────────────────────────────────────────────────────────
@@ -954,9 +883,7 @@ export default function Workspace3D({
         pointerEvents: modelsLoaded ? "none" : "auto",
       }}>
         <div style={{
-          width: 360,
-          maxWidth: "88vw",
-          padding: "28px 24px",
+          padding: "24px 32px",
           background: "rgba(10, 16, 28, 0.85)",
           border: "1px solid #1a3555",
           borderRadius: "12px",
@@ -964,13 +891,13 @@ export default function Workspace3D({
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: 16,
+          gap: 14,
         }}>
           {/* Animated pulsing spinner */}
           <div style={{
             position: "relative",
-            width: 52,
-            height: 52,
+            width: 48,
+            height: 48,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -983,49 +910,11 @@ export default function Workspace3D({
               borderTopColor: "#3a8aff",
               animation: "spin 1.2s linear infinite",
             }} />
-            <span style={{ fontSize: 22, filter: "drop-shadow(0 0 8px rgba(90, 191, 122, 0.4))" }}>🧠</span>
+            <span style={{ fontSize: 20, filter: "drop-shadow(0 0 8px rgba(90, 191, 122, 0.4))" }}>🧠</span>
           </div>
 
-          <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, color: "#90d4ff", textTransform: "uppercase" }}>
-              NEURAL ATLAS
-            </div>
-            <div style={{ fontSize: 10, color: "#5a7a9a", marginTop: 4, letterSpacing: 1, fontFamily: "monospace" }}>
-              {loadStage}
-            </div>
-          </div>
-
-          {/* Progress Bar Container */}
-          <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
-            <div style={{
-              width: "100%",
-              height: 4,
-              background: "rgba(255, 255, 255, 0.06)",
-              borderRadius: 2,
-              overflow: "hidden",
-              border: "1px solid rgba(255, 255, 255, 0.05)",
-            }}>
-              <div style={{
-                height: "100%",
-                width: `${loadProgress}%`,
-                background: "linear-gradient(90deg, #1e6acc, #3a8aff, #7ac0f0)",
-                borderRadius: 2,
-                boxShadow: "0 0 10px rgba(58, 138, 255, 0.6)",
-                transition: "width 0.25s ease-out",
-              }} />
-            </div>
-
-            <div style={{
-              display: "flex",
-              justifyContent: "space-between",
-              fontSize: 10,
-              color: "#4a6a8a",
-              letterSpacing: 0.5,
-              fontFamily: "monospace",
-            }}>
-              <span>{(downloadedBytes / (1024 * 1024)).toFixed(1)} / 60.0 MB</span>
-              <span style={{ color: "#7ac0f0", fontWeight: 600 }}>{loadProgress}%</span>
-            </div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 2, color: "#90d4ff", textTransform: "uppercase" }}>
+            INITIALIZING ATLAS...
           </div>
         </div>
       </div>
