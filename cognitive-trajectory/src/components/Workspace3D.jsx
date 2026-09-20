@@ -73,6 +73,45 @@ function createTextSprite(text) {
   return sprite;
 }
 
+async function fetchWithProgress(url, onChunk, responseType = 'json') {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Failed to load ${url}: ${response.statusText}`);
+  
+  const contentLength = response.headers.get('content-length');
+  const total = contentLength ? parseInt(contentLength, 10) : 0;
+  
+  if (!response.body) {
+    if (responseType === 'json') return response.json();
+    return response.arrayBuffer();
+  }
+
+  const reader = response.body.getReader();
+  let received = 0;
+  const chunks = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (onChunk) onChunk(value.length, received, total);
+  }
+
+  const allChunks = new Uint8Array(received);
+  let pos = 0;
+  for (const chunk of chunks) {
+    allChunks.set(chunk, pos);
+    pos += chunk.length;
+  }
+
+  if (responseType === 'json') {
+    const text = new TextDecoder('utf-8').decode(allChunks);
+    return JSON.parse(text);
+  } else {
+    return allChunks.buffer;
+  }
+}
+
 export default function Workspace3D({
   currentTurn,
   tokenIndex,
@@ -88,6 +127,9 @@ export default function Workspace3D({
   const llmData = isLlmTurn ? currentTurn?.llm : null;
 
   const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [loadProgress, setLoadProgress] = useState(0);
+  const [loadStage, setLoadStage] = useState('Downloading 3D cortical mesh & voxel atlas...');
+  const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [selectedRegion, setSelectedRegion] = useState(null);
 
   // Dedicated ref so the Three.js handler can always call the latest setter
@@ -144,10 +186,38 @@ export default function Workspace3D({
     sceneRef.current.humanSprite = humanSprite;
     sceneRef.current.targetHumanColor = new THREE.Color("#3a5a7a");
 
+    const loadedSizes = { brain: 0, regionMap: 0, volume: 0, normals: 0 };
+    const TOTAL_EXPECTED = 60 * 1024 * 1024; // ~60MB estimated total
+
+    const updateOverallProgress = (filename) => {
+      const totalDownloaded = loadedSizes.brain + loadedSizes.regionMap + loadedSizes.volume + loadedSizes.normals;
+      setDownloadedBytes(totalDownloaded);
+      const pct = Math.min(98, Math.max(1, Math.round((totalDownloaded / TOTAL_EXPECTED) * 100)));
+      setLoadProgress(pct);
+      setLoadStage(`Downloading neural data (${(totalDownloaded / (1024 * 1024)).toFixed(1)} MB / ~60 MB)...`);
+    };
+
     Promise.all([
-      fetch("/brain.json").then((r) => r.json()),
-      fetch("/regionMap.json").then((r) => r.json()),
-    ]).then(([brainData, regionMap]) => {
+      fetchWithProgress("/brain.json", (delta) => {
+        loadedSizes.brain += delta;
+        updateOverallProgress("brain.json");
+      }, 'json'),
+      fetchWithProgress("/regionMap.json", (delta) => {
+        loadedSizes.regionMap += delta;
+        updateOverallProgress("regionMap.json");
+      }, 'json'),
+      fetchWithProgress('/atlas_volume.bin?v=' + Date.now(), (delta) => {
+        loadedSizes.volume += delta;
+        updateOverallProgress("atlas_volume.bin");
+      }, 'buffer'),
+      fetchWithProgress('/atlas_normals.bin?v=' + Date.now(), (delta) => {
+        loadedSizes.normals += delta;
+        updateOverallProgress("atlas_normals.bin");
+      }, 'buffer'),
+    ]).then(([brainData, regionMap, volBuffer, normalsBuffer]) => {
+      setLoadStage("Building 3D MRI raymarching volume & shaders...");
+      setLoadProgress(99);
+
       const { vertices } = brainData;
 
       // ── Voxelization for MRI Raymarching ──────────────────────────────────
@@ -185,25 +255,20 @@ export default function Workspace3D({
       const sizeZ = maxZ - minZ;
       const maxDim = Math.max(sizeX, sizeY, sizeZ);
       const SIZE = 128;
-      // Pre-allocate empty 3D Texture to ensure ShaderMaterial compiles successfully.
-      const initialVolData = new Uint8Array(SIZE * SIZE * SIZE * 4); // RGBA format
-      const volumeTex = new THREE.Data3DTexture(initialVolData, SIZE, SIZE, SIZE);
+
+      // Allocate and assign 3D Volume Texture
+      const volData = new Uint8Array(volBuffer);
+      const volumeTex = new THREE.Data3DTexture(volData, SIZE, SIZE, SIZE);
       volumeTex.format = THREE.RGBAFormat;
       volumeTex.type = THREE.UnsignedByteType;
       volumeTex.minFilter = volumeTex.magFilter = THREE.NearestFilter;
       volumeTex.unpackAlignment = 1;
       volumeTex.needsUpdate = true;
+      sceneRef.current.volData = volData;
 
-      // Pre-allocate normal map 3D Texture for lighting
-      const initialNormalsData = new Uint8Array(SIZE * SIZE * SIZE * 4);
-      // Fill the placeholder with straight-up normals (X=0, Y=0, Z=1.0) so lighting doesn't evaluate to black before load
-      for (let i = 0; i < initialNormalsData.length; i += 4) {
-         initialNormalsData[i]     = 128; // X: 0.0
-         initialNormalsData[i + 1] = 128; // Y: 0.0
-         initialNormalsData[i + 2] = 255; // Z: 1.0
-         initialNormalsData[i + 3] = 255; // W: 1.0
-      }
-      const normalsTex = new THREE.Data3DTexture(initialNormalsData, SIZE, SIZE, SIZE);
+      // Allocate and assign normal map 3D Texture
+      const normalsData = new Uint8Array(normalsBuffer);
+      const normalsTex = new THREE.Data3DTexture(normalsData, SIZE, SIZE, SIZE);
       normalsTex.format = THREE.RGBAFormat;
       normalsTex.type = THREE.UnsignedByteType;
       normalsTex.minFilter = normalsTex.magFilter = THREE.NearestFilter;
@@ -218,39 +283,6 @@ export default function Workspace3D({
       paletteTex.needsUpdate = true;
       sceneRef.current.paletteData = paletteData;
       sceneRef.current.paletteTex  = paletteTex;
-
-      // Fetch the pre-computed anatomical atlas with procedural growth maps
-      fetch('/atlas_volume.bin?v=' + Date.now())
-        .then(res => res.arrayBuffer())
-        .then(buffer => {
-           const volData = new Uint8Array(buffer);
-           
-           // We exported a 4-channel array from python (RGBA)
-           // R = Region ID, G = Growth Rank (0..255)
-           volumeTex.image.data = volData;
-           volumeTex.needsUpdate = true;
-           
-           sceneRef.current.volData = volData; // Store for CPU-side raymarching
-           
-           if (sceneRef.current.brainMat) {
-               sceneRef.current.brainMat.needsUpdate = true;
-           }
-           console.log(`[Raymarch] Loaded anatomical 128x128x128 binary atlas!`);
-        })
-        .catch(err => console.error("Failed to load atlas:", err));
-
-      // Fetch the pre-computed volumetric normals for structural lighting
-      fetch('/atlas_normals.bin?v=' + Date.now())
-        .then(res => res.arrayBuffer())
-        .then(buffer => {
-           normalsTex.image.data.set(new Uint8Array(buffer));
-           normalsTex.needsUpdate = true;
-           if (sceneRef.current.brainMat) {
-               sceneRef.current.brainMat.needsUpdate = true;
-           }
-           console.log(`[Raymarch] Loaded anatomical 128x128x128 normals map!`);
-        })
-        .catch(err => console.error("Failed to load normals:", err));
 
       // ─ Shader Material for Raymarching ─
       const boxGeo = new THREE.BoxGeometry(1, 1, 1);
@@ -464,7 +496,11 @@ export default function Workspace3D({
       sceneRef.current.regionMap = regionMap;
       sceneRef.current.regionNameToKey = regionNameToKey;
       console.log('[Brain] Loaded. Rayserizer done. Regions in map:', Object.keys(regionMap).length);
-      setModelsLoaded(true);
+      setLoadProgress(100);
+      setLoadStage("Ready");
+      setTimeout(() => {
+        setModelsLoaded(true);
+      }, 350);
     });
 
     // ── LLM Stack ─────────────────────────────────────────────────────────────
@@ -900,11 +936,109 @@ export default function Workspace3D({
         </div>
       )}
 
-      {/* Keyframe for card entrance */}
+      {/* Loading Overlay */}
+      <div style={{
+        position: "absolute",
+        inset: 0,
+        background: "radial-gradient(ellipse at center, rgba(14, 22, 38, 0.96) 0%, rgba(6, 8, 16, 0.98) 100%)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 50,
+        fontFamily: "'Inter', sans-serif",
+        backdropFilter: "blur(8px)",
+        transition: "opacity 0.6s ease, visibility 0.6s ease",
+        opacity: modelsLoaded ? 0 : 1,
+        visibility: modelsLoaded ? "hidden" : "visible",
+        pointerEvents: modelsLoaded ? "none" : "auto",
+      }}>
+        <div style={{
+          width: 380,
+          maxWidth: "88vw",
+          padding: "30px 24px",
+          background: "rgba(10, 16, 28, 0.85)",
+          border: "1px solid #1a3555",
+          borderRadius: "12px",
+          boxShadow: "0 0 40px rgba(10, 40, 90, 0.5), inset 0 1px 0 rgba(255,255,255,0.06)",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 16,
+        }}>
+          {/* Animated pulsing spinner */}
+          <div style={{
+            position: "relative",
+            width: 56,
+            height: 56,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}>
+            <div style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: "50%",
+              border: "2px solid rgba(58, 138, 255, 0.15)",
+              borderTopColor: "#3a8aff",
+              animation: "spin 1.2s linear infinite",
+            }} />
+            <span style={{ fontSize: 24, filter: "drop-shadow(0 0 8px rgba(90, 191, 122, 0.4))" }}>🧠</span>
+          </div>
+
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: 2, color: "#90d4ff", textTransform: "uppercase" }}>
+              Loading Neural Atlas
+            </div>
+            <div style={{ fontSize: 11, color: "#5a7a9a", marginTop: 4, letterSpacing: 0.5 }}>
+              {loadStage}
+            </div>
+          </div>
+
+          {/* Progress Bar Container */}
+          <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{
+              width: "100%",
+              height: 6,
+              background: "rgba(255, 255, 255, 0.06)",
+              borderRadius: 3,
+              overflow: "hidden",
+              border: "1px solid rgba(255, 255, 255, 0.05)",
+            }}>
+              <div style={{
+                height: "100%",
+                width: `${loadProgress}%`,
+                background: "linear-gradient(90deg, #1e6acc, #3a8aff, #7ac0f0)",
+                borderRadius: 3,
+                boxShadow: "0 0 10px rgba(58, 138, 255, 0.6)",
+                transition: "width 0.25s ease-out",
+              }} />
+            </div>
+
+            <div style={{
+              display: "flex",
+              justifyContent: "space-between",
+              fontSize: 10,
+              color: "#4a6a8a",
+              letterSpacing: 0.5,
+              fontFamily: "monospace",
+            }}>
+              <span>{(downloadedBytes / (1024 * 1024)).toFixed(1)} MB / ~60.0 MB</span>
+              <span style={{ color: "#7ac0f0", fontWeight: 600 }}>{loadProgress}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Keyframe styles */}
       <style>{`
         @keyframes fadeSlideIn {
           from { opacity: 0; transform: translateY(-6px); }
           to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes spin {
+          0%   { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
         }
       `}</style>
 
