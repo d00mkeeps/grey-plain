@@ -128,7 +128,7 @@ export default function Workspace3D({
 
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [loadProgress, setLoadProgress] = useState(0);
-  const [loadStage, setLoadStage] = useState('Downloading 3D cortical mesh & voxel atlas...');
+  const [loadStage, setLoadStage] = useState('STREAMING VOXEL MESH...');
   const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [selectedRegion, setSelectedRegion] = useState(null);
 
@@ -189,33 +189,33 @@ export default function Workspace3D({
     const loadedSizes = { brain: 0, regionMap: 0, volume: 0, normals: 0 };
     const TOTAL_EXPECTED = 60 * 1024 * 1024; // ~60MB estimated total
 
-    const updateOverallProgress = (filename) => {
+    const updateOverallProgress = () => {
       const totalDownloaded = loadedSizes.brain + loadedSizes.regionMap + loadedSizes.volume + loadedSizes.normals;
       setDownloadedBytes(totalDownloaded);
       const pct = Math.min(98, Math.max(1, Math.round((totalDownloaded / TOTAL_EXPECTED) * 100)));
       setLoadProgress(pct);
-      setLoadStage(`Downloading neural data (${(totalDownloaded / (1024 * 1024)).toFixed(1)} MB / ~60 MB)...`);
+      setLoadStage(`STREAMING MESH // VOXELS`);
     };
 
     Promise.all([
       fetchWithProgress("/brain.json", (delta) => {
         loadedSizes.brain += delta;
-        updateOverallProgress("brain.json");
+        updateOverallProgress();
       }, 'json'),
       fetchWithProgress("/regionMap.json", (delta) => {
         loadedSizes.regionMap += delta;
-        updateOverallProgress("regionMap.json");
+        updateOverallProgress();
       }, 'json'),
       fetchWithProgress('/atlas_volume.bin?v=' + Date.now(), (delta) => {
         loadedSizes.volume += delta;
-        updateOverallProgress("atlas_volume.bin");
+        updateOverallProgress();
       }, 'buffer'),
       fetchWithProgress('/atlas_normals.bin?v=' + Date.now(), (delta) => {
         loadedSizes.normals += delta;
-        updateOverallProgress("atlas_normals.bin");
+        updateOverallProgress();
       }, 'buffer'),
     ]).then(([brainData, regionMap, volBuffer, normalsBuffer]) => {
-      setLoadStage("Building 3D MRI raymarching volume & shaders...");
+      setLoadStage("COMPILING SHADERS...");
       setLoadProgress(99);
 
       const { vertices } = brainData;
@@ -497,7 +497,7 @@ export default function Workspace3D({
       sceneRef.current.regionNameToKey = regionNameToKey;
       console.log('[Brain] Loaded. Rayserizer done. Regions in map:', Object.keys(regionMap).length);
       setLoadProgress(100);
-      setLoadStage("Ready");
+      setLoadStage("ONLINE");
       setTimeout(() => {
         setModelsLoaded(true);
       }, 350);
@@ -910,10 +910,10 @@ export default function Workspace3D({
           {/* Activation */}
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "5px" }}>
-              <span style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.07em", color: "#64748b" }}>
-                Activation
+              <span style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.08em", color: "#64748b" }}>
+                ACTIVATION
               </span>
-              <span style={{ fontSize: "11px", fontWeight: 600, color: selectedRegion.networkColor }}>
+              <span style={{ fontSize: "11px", fontWeight: 600, color: selectedRegion.networkColor, fontFamily: "monospace" }}>
                 {selectedRegion.activation > 0
                   ? `${(selectedRegion.activation * 100).toFixed(0)}%`
                   : "—"}
@@ -954,9 +954,9 @@ export default function Workspace3D({
         pointerEvents: modelsLoaded ? "none" : "auto",
       }}>
         <div style={{
-          width: 380,
+          width: 360,
           maxWidth: "88vw",
-          padding: "30px 24px",
+          padding: "28px 24px",
           background: "rgba(10, 16, 28, 0.85)",
           border: "1px solid #1a3555",
           borderRadius: "12px",
@@ -969,8 +969,8 @@ export default function Workspace3D({
           {/* Animated pulsing spinner */}
           <div style={{
             position: "relative",
-            width: 56,
-            height: 56,
+            width: 52,
+            height: 52,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -983,14 +983,14 @@ export default function Workspace3D({
               borderTopColor: "#3a8aff",
               animation: "spin 1.2s linear infinite",
             }} />
-            <span style={{ fontSize: 24, filter: "drop-shadow(0 0 8px rgba(90, 191, 122, 0.4))" }}>🧠</span>
+            <span style={{ fontSize: 22, filter: "drop-shadow(0 0 8px rgba(90, 191, 122, 0.4))" }}>🧠</span>
           </div>
 
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: 2, color: "#90d4ff", textTransform: "uppercase" }}>
-              Loading Neural Atlas
+            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, color: "#90d4ff", textTransform: "uppercase" }}>
+              NEURAL ATLAS
             </div>
-            <div style={{ fontSize: 11, color: "#5a7a9a", marginTop: 4, letterSpacing: 0.5 }}>
+            <div style={{ fontSize: 10, color: "#5a7a9a", marginTop: 4, letterSpacing: 1, fontFamily: "monospace" }}>
               {loadStage}
             </div>
           </div>
@@ -999,9 +999,9 @@ export default function Workspace3D({
           <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{
               width: "100%",
-              height: 6,
+              height: 4,
               background: "rgba(255, 255, 255, 0.06)",
-              borderRadius: 3,
+              borderRadius: 2,
               overflow: "hidden",
               border: "1px solid rgba(255, 255, 255, 0.05)",
             }}>
@@ -1009,7 +1009,7 @@ export default function Workspace3D({
                 height: "100%",
                 width: `${loadProgress}%`,
                 background: "linear-gradient(90deg, #1e6acc, #3a8aff, #7ac0f0)",
-                borderRadius: 3,
+                borderRadius: 2,
                 boxShadow: "0 0 10px rgba(58, 138, 255, 0.6)",
                 transition: "width 0.25s ease-out",
               }} />
@@ -1023,7 +1023,7 @@ export default function Workspace3D({
               letterSpacing: 0.5,
               fontFamily: "monospace",
             }}>
-              <span>{(downloadedBytes / (1024 * 1024)).toFixed(1)} MB / ~60.0 MB</span>
+              <span>{(downloadedBytes / (1024 * 1024)).toFixed(1)} / 60.0 MB</span>
               <span style={{ color: "#7ac0f0", fontWeight: 600 }}>{loadProgress}%</span>
             </div>
           </div>
@@ -1041,22 +1041,6 @@ export default function Workspace3D({
           100% { transform: rotate(360deg); }
         }
       `}</style>
-
-      {/* Top-right label */}
-      <div style={{
-        position: "absolute", top: "16px", right: "16px",
-        color: "#8a9ab0", fontFamily: "Inter, sans-serif",
-        fontSize: "14px", pointerEvents: "none", zIndex: 10,
-      }}>
-        Relative activation — normalised for observability
-      </div>
-
-      <div
-        style={{ position: "absolute", top: "40px", right: "16px",
-          color: "#ff0000", fontFamily: "Inter, sans-serif",
-          fontSize: "14px", pointerEvents: "none", zIndex: 10 }}
-        id="debug-overlay"
-      />
 
       <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
     </div>

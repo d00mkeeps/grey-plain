@@ -2,9 +2,9 @@
 
 export const NETWORKS = {
   language:  { label: 'Language',       color: '#E87A3A' },
-  dmn:       { label: 'Default Mode',   color: '#4A90D9' },
+  dmn:       { label: 'DMN',            color: '#4A90D9' },
   attention: { label: 'Attention',      color: '#5ABF7A' },
-  motor:     { label: 'Sensorimotor',   color: '#9B6DD4' },
+  motor:     { label: 'Motor',          color: '#9B6DD4' },
   visual:    { label: 'Visual',         color: '#D4C44A' },
   limbic:    { label: 'Limbic',         color: '#D46A8A' },
 }

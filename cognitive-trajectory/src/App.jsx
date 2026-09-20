@@ -126,7 +126,7 @@ export default function App() {
       }}>
         {/* Title */}
         <span style={{ fontSize: 13, letterSpacing: 2, color: '#3a6a9a', fontWeight: 600 }}>
-          COGNITIVE TRAJECTORY VISUALISER
+          COGNITIVE TRAJECTORY
         </span>
 
         {/* Center controls: Play/Pause, Session selector, Turn info, Reset camera */}
@@ -134,7 +134,7 @@ export default function App() {
           {/* Play / Pause button */}
           <button
             onClick={togglePlay}
-            title={isPlaying ? "Pause Playback" : "Start Playback"}
+            title={isPlaying ? "Pause" : "Play"}
             style={{
               display:        'flex',
               alignItems:     'center',
@@ -183,15 +183,15 @@ export default function App() {
 
           {/* Turn status */}
           {playbackConversation.length > 0 && (
-            <span style={{ fontSize: 11, color: '#4a6a8a', letterSpacing: 1 }}>
-              TURN {turnIndex + 1} / {playbackConversation.length}
+            <span style={{ fontSize: 11, color: '#4a6a8a', letterSpacing: 1, fontFamily: 'monospace' }}>
+              TURN {turnIndex + 1}/{playbackConversation.length}
             </span>
           )}
 
           {/* Reset camera */}
           <button
             onClick={() => setResetCam(c => c + 1)}
-            title="Reset 3D camera position"
+            title="Reset camera view"
             style={{
               background:   '#101824',
               border:       '1px solid #1a3048',
@@ -203,7 +203,7 @@ export default function App() {
               letterSpacing: 1,
               transition:   'all 0.15s ease',
             }}>
-            RESET CAMERA
+            RESET CAM
           </button>
         </div>
 
