@@ -557,3 +557,13 @@ Formalise the "alignment" concept as a scalar metric computed from the overlap b
     ├── export_brain.py                # FreeSurfer mesh export
     └── update_mock.py                 # Backfills token activations in mockConversation.json
 ```
+
+---
+
+<!-- AUTO-DOCS-START -->
+## 📚 Living Documentation
+
+*Auto-generated on every push to `main`:*
+
+* 📘 **[API Reference](docs/API.md)**: Route catalog with 3 registered endpoints.
+<!-- AUTO-DOCS-END -->
